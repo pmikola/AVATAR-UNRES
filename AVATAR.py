@@ -23,36 +23,26 @@ class dynamicAct(nn.Module):
             c.append(a + b)
         return torch.tensor(c[0], device=device)
 
-#
-# class HopfieldNet:
-#     def __init__(self, init):
-#         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-#         self.memory = torch.tensor(init, dtype=torch.float, device=self.device)
-#         if self.memory.size()[0] > 1:
-#             self.n = self.memory.size()[1]
-#         else:
-#             self.n = len(self.memory)
-#         self.state = torch.randint(-2, 2, (self.n, 1), dtype=torch.float, device=self.device)  # state vector
-#         self.weights = torch.zeros(self.n, self.n, dtype=torch.float, device=self.device)  # weights vector
-#         self.energies = torch.tensor([], dtype=torch.float, device=self.device)  # tensor for tracking of energy
-#
-#     def learning(self):
-#         self.weights = (1 / self.memory.size()[0]) * torch.matmul(self.memory.t(), self.memory)  # Hebbian learning
-#         self.weights.fill_diagonal_(0)
-#
-#     def update_state(self, n_update):
-#         for _ in range(n_update):  # update n neurons randomly
-#             rand_index = torch.randint(0, self.n, (1,), dtype=torch.long,
-#                                        device=self.device)  # pick a random neuron in the state vector
-#             index_activation = torch.matmul(self.weights[rand_index, :],
-#                                             self.state)  # compute activation for randomly indexed neuron
-#             # threshold function for binary state change
-#             rand_index_value = rand_index.item()  # Extract the scalar value from rand_index
-#             self.state[rand_index_value] = torch.where(index_activation < 0, -1.0, 1.0)
-#
-#     def energyUpdate(self):
-#         energy = -0.5 * torch.matmul(torch.matmul(self.state.t(), self.weights), self.state)
-#         self.energies = torch.cat((self.energies, energy.view(1)), dim=0)
+
+class SpectralConv1d(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int, modes: int):
+        super(SpectralConv1d, self).__init__()
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.modes = modes
+        self.scale = (1 / (in_channels * out_channels))
+        self.weights = nn.Parameter(self.scale * torch.rand(out_channels, self.modes, dtype=torch.cfloat))
+
+    def compl_mul1d(self, input, weights):
+        out = torch.einsum("bi,ow->bw", input, weights)
+        return out
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x_ft = torch.fft.rfft(x, dim=1)
+        out_ft = self.compl_mul1d(x_ft[:, :self.modes], self.weights)
+        x = torch.fft.irfft(out_ft, n=x.size(-1))
+        return x
 
 
 class AvatarUNRES(nn.Module):
@@ -66,8 +56,8 @@ class AvatarUNRES(nn.Module):
         self.vel = vel
         self.acc = acc
         self.force = force
-        self.uplift_dim = 500
-        self.drop_dim = 250
+        self.uplift_dim = 1000
+        self.drop_dim = 500
         self.dynamics = self.pos.shape[1] + self.vel.shape[1] + self.acc.shape[1] + self.force.shape[1]
 
         self.uplift_meta = nn.Linear(self.meta.shape[1], self.uplift_dim, bias=True)
@@ -75,6 +65,34 @@ class AvatarUNRES(nn.Module):
         self.uplift_vel = nn.Linear(self.vel.shape[1], self.uplift_dim, bias=True)
         self.uplift_acc = nn.Linear(self.acc.shape[1], self.uplift_dim, bias=True)
         self.uplift_force = nn.Linear(self.force.shape[1], self.uplift_dim, bias=True)
+        self.modes = 16
+        self.spectralConvp0 = SpectralConv1d(self.uplift_dim, self.uplift_dim, self.modes)
+        self.wp0 = nn.Linear(self.uplift_dim, self.uplift_dim)
+        self.spectralConvp1 = SpectralConv1d(self.uplift_dim, self.uplift_dim, self.modes)
+        self.wp1 = nn.Linear(self.uplift_dim, self.uplift_dim)
+        self.spectralConvp2 = SpectralConv1d(self.uplift_dim, self.uplift_dim, self.modes)
+        self.wp2 = nn.Linear(self.uplift_dim, self.uplift_dim)
+
+        self.spectralConvv0 = SpectralConv1d(self.uplift_dim, self.uplift_dim, self.modes)
+        self.wv0 = nn.Linear(self.uplift_dim, self.uplift_dim)
+        self.spectralConvv1 = SpectralConv1d(self.uplift_dim, self.uplift_dim, self.modes)
+        self.wv1 = nn.Linear(self.uplift_dim, self.uplift_dim)
+        self.spectralConvv2 = SpectralConv1d(self.uplift_dim, self.uplift_dim, self.modes)
+        self.wv2 = nn.Linear(self.uplift_dim, self.uplift_dim)
+
+        self.spectralConva0 = SpectralConv1d(self.uplift_dim, self.uplift_dim, self.modes)
+        self.wa0 = nn.Linear(self.uplift_dim, self.uplift_dim)
+        self.spectralConva1 = SpectralConv1d(self.uplift_dim, self.uplift_dim, self.modes)
+        self.wa1 = nn.Linear(self.uplift_dim, self.uplift_dim)
+        self.spectralConva2 = SpectralConv1d(self.uplift_dim, self.uplift_dim, self.modes)
+        self.wa2 = nn.Linear(self.uplift_dim, self.uplift_dim)
+
+        self.spectralConvf0 = SpectralConv1d(self.uplift_dim, self.uplift_dim, 16)
+        self.wf0 = nn.Linear(self.uplift_dim, self.uplift_dim)
+        self.spectralConvf1 = SpectralConv1d(self.uplift_dim, self.uplift_dim, 16)
+        self.wf1 = nn.Linear(self.uplift_dim, self.uplift_dim)
+        self.spectralConvf2 = SpectralConv1d(self.uplift_dim, self.uplift_dim, 16)
+        self.wf2 = nn.Linear(self.uplift_dim, self.uplift_dim)
 
         self.astrA0 = nn.Linear(self.uplift_dim, self.uplift_dim, bias=True)
         self.astrB0 = nn.Linear(self.uplift_dim, 5, bias=True)
@@ -118,30 +136,76 @@ class AvatarUNRES(nn.Module):
         a = self.uplift_acc(acc)
         f = self.uplift_force(force)
 
-        # TODO : FOURIER or WNO
+        # TODO :WNO - compare with FNO
+        fpos = self.spectralConvp0(p)
+        wpos = self.wp0(p)
+        fwpos = torch.relu(fpos + wpos)
 
-        up_out = torch.cat([p, v, a, f], dim=1)
+        fpos = self.spectralConvp1(fwpos)
+        wpos = self.wp1(fwpos)
+        fwpos = torch.relu(fpos + wpos)
+
+        fpos = self.spectralConvp2(fwpos)
+        wpos = self.wp2(fwpos)
+        fwpos = torch.relu(fpos + wpos)
+
+        fvel = self.spectralConvv0(v)
+        wvel = self.wv0(v)
+        fwvel = torch.relu(fvel + wvel)
+
+        fvel = self.spectralConvv1(fwvel)
+        wvel = self.wv1(fwvel)
+        fwvel = torch.relu(fvel + wvel)
+
+        fvel = self.spectralConvv2(fwvel)
+        wvel = self.wv2(fwvel)
+        fwvel = torch.relu(fvel + wvel)
+
+        facc = self.spectralConva0(a)
+        wacc = self.wa0(a)
+        fwacc = torch.relu(facc + wacc)
+
+        facc = self.spectralConva1(fwacc)
+        wacc = self.wa1(fwacc)
+        fwacc = torch.relu(facc + wacc)
+
+        facc = self.spectralConva2(fwacc)
+        wacc = self.wa2(fwacc)
+        fwacc = torch.relu(facc + wacc)
+
+        fforce = self.spectralConvf0(f)
+        wforce = self.wf0(f)
+        fwforce = torch.relu(fforce + wforce)
+
+        fforce = self.spectralConvf1(fwforce)
+        wforce = self.wf1(fwforce)
+        fwforce = torch.relu(fforce + wforce)
+
+        fforce = self.spectralConvf2(fwforce)
+        wforce = self.wf2(fwforce)
+        fwforce = torch.relu(fforce + wforce)
+
+        up_out = torch.cat([fwpos, fwvel, fwacc, fwforce], dim=1)
 
         # ASTROCYTES CONTROL UNITS
-        astrA0 = torch.tanh(self.astrA0(m))
-        astrB0 = self.astrB0(astrA0)
-        astrA1 = torch.tanh(self.astrA1(m))
-        astrB1 = self.astrB1(astrA1)
-        astrA2 = torch.tanh(self.astrA2(m))
-        astrB2 = self.astrB2(astrA2)
+        # astrA0 = torch.tanh(self.astrA0(m))
+        # astrB0 = self.astrB0(astrA0)
+        # astrA1 = torch.tanh(self.astrA1(m))
+        # astrB1 = self.astrB1(astrA1)
+        # astrA2 = torch.tanh(self.astrA2(m))
+        # astrB2 = self.astrB2(astrA2)
         # ASTROCYTES CONTROL UNITS
 
-        h0 = torch.tanh(self.h0(up_out))
+        h0 = torch.relu(self.h0(up_out))
 
         # ARU UNIT
-        ARU1UP = torch.tanh(self.ARU1Uplif(h0))
+        # ARU1UP = torch.tanh(self.ARU1Uplif(h0))
         # lstm1, _ = self.LSTM1(ARU1UP)
-        # TODO Recurent Hopefield network or LSTM
-        ARU1DOWN = self.ARU1Drop(ARU1UP)
+        # TODO Recurent Hopefield network or LSTM or Liquid NN
+        # ARU1DOWN = self.ARU1Drop(ARU1UP)
         # ARU UNIT
-
-        h1 = torch.tanh(self.h1(h0))
-        h2 = torch.tanh(self.h2(h1))
+        h1 = torch.relu(self.h1(h0))
+        h2 = torch.relu(self.h2(h1))
 
         # lq0, _ = self.liquid0(h0, self.hx0)
         out = self.output(h2)

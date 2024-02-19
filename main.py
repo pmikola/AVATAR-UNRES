@@ -143,7 +143,7 @@ optimizer = optim.Adam(model.parameters(), lr=1e-5)
 
 # Training loop
 indices = torch.randperm(meta.shape[0]-1)
-train_size = int(0.8 * meta.shape[0])
+train_size = int(0.9 * meta.shape[0])
 val_size = meta.shape[0] - train_size
 train_indices = indices[:train_size]
 val_indices = indices[train_size:]
