@@ -3,11 +3,14 @@ import random
 import struct
 import sys
 import sysconfig
+import time
 from statistics import mean
 
 import matplotlib
 import numpy as np
 import torch
+from matplotlib import pyplot as plt, cm
+from mpl_toolkits.mplot3d import axes3d
 from torch import nn, optim
 from torch.nn.functional import normalize
 
@@ -101,6 +104,50 @@ vel = [[float(s) for s in x] for x in vel]
 acc = [[float(s) for s in x] for x in acc]
 force = [[float(s) for s in x] for x in force]
 
+ground_truth_dynamics_pos = []
+ground_truth_dynamics_vel = []
+ground_truth_dynamics_acc = []
+ground_truth_dynamics_force = []
+gtdlen = len(pos) * 0.03
+for i in range(int(gtdlen)):
+    ground_truth_dynamics_pos.append(pos[i])
+    ground_truth_dynamics_vel.append(vel[i])
+    ground_truth_dynamics_acc.append(acc[i])
+    ground_truth_dynamics_force.append(force[i])
+
+ground_truth_dynamics_pos = np.array(ground_truth_dynamics_pos)
+ground_truth_dynamics_vel = np.array(ground_truth_dynamics_vel)
+ground_truth_dynamics_acc = np.array(ground_truth_dynamics_acc)
+ground_truth_dynamics_force = np.array(ground_truth_dynamics_force)
+x = range(np.array(ground_truth_dynamics_pos).shape[1])
+y = range(int(gtdlen))
+fig = plt.figure(figsize=(8, 6))
+hp = fig.add_subplot(221, projection='3d')
+hv = fig.add_subplot(222, projection='3d')
+ha = fig.add_subplot(223, projection='3d')
+hf = fig.add_subplot(224, projection='3d')
+X, Y = np.meshgrid(x, y)
+marker = '.'
+marker_size = 0.1
+linewidth = 0.1
+
+hp.scatter(X, Y, ground_truth_dynamics_pos, linewidth=linewidth, antialiased=False, s=marker_size)
+hv.scatter(X, Y, ground_truth_dynamics_vel, linewidth=linewidth, antialiased=False, s=marker_size)
+ha.scatter(X, Y, ground_truth_dynamics_acc, linewidth=linewidth, antialiased=False, s=marker_size)
+hf.scatter(X, Y, ground_truth_dynamics_force, linewidth=linewidth, antialiased=False, s=marker_size)
+plt.tight_layout(pad=-5.0, w_pad=-5.0, h_pad=-5.0)
+hp.grid(False)
+hp.axis('off')
+hv.grid(False)
+hv.axis('off')
+ha.grid(False)
+ha.axis('off')
+hf.grid(False)
+hf.axis('off')
+plt.show()
+
+time.sleep(1000)
+
 
 def binary(num):
     # IEEE 754
@@ -142,12 +189,11 @@ criterion = nn.MSELoss(reduction='mean')
 optimizer = optim.Adam(model.parameters(), lr=1e-5)
 
 # Training loop
-indices = torch.randperm(meta.shape[0]-1)
+indices = torch.randperm(meta.shape[0] - 1)
 train_size = int(0.9 * meta.shape[0])
 val_size = meta.shape[0] - train_size
 train_indices = indices[:train_size]
 val_indices = indices[train_size:]
-
 
 num_epochs = 15000
 batch_size = 25
@@ -176,11 +222,11 @@ for epoch in range(num_epochs):
     if (epoch) % 100 == 0:
         with torch.set_grad_enabled(False):
             tval = val_indices
-            #tval = random.sample(range(0, meta.shape[0] - 1), batch_size)
+            # tval = random.sample(range(0, meta.shape[0] - 1), batch_size)
             tval_1 = [s.item() + 1 for s in tval]
             bbloss = []
             preds_test = model(meta[tval], coords[tval], velocities[tval], accelerations[tval],
-                          forces[tval])
+                               forces[tval])
             target_test = torch.cat([coords[tval_1], velocities[tval_1], accelerations[tval_1], forces[tval_1]], dim=1)
             loss_val = criterion(preds_test, target_test)
             print(f'Epoch [{epoch + 1}/{num_epochs}],Train Loss: {loss.item():.5f}, Validation Loss: {loss_val:.5f}')

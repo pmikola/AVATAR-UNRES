@@ -56,8 +56,8 @@ class AvatarUNRES(nn.Module):
         self.vel = vel
         self.acc = acc
         self.force = force
-        self.uplift_dim = 1000
-        self.drop_dim = 500
+        self.uplift_dim = 1500
+        self.drop_dim = 1500
         self.dynamics = self.pos.shape[1] + self.vel.shape[1] + self.acc.shape[1] + self.force.shape[1]
 
         self.uplift_meta = nn.Linear(self.meta.shape[1], self.uplift_dim, bias=True)
