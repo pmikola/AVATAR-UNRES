@@ -1,7 +1,9 @@
 import math
 import random
+import struct
 import sys
 import sysconfig
+from statistics import mean
 
 import matplotlib
 import numpy as np
@@ -10,6 +12,8 @@ from torch import nn, optim
 from torch.nn.functional import normalize
 
 from AVATAR import AvatarUNRES
+import gc
+
 random.seed(2024)
 np.random.seed(2024)
 torch.manual_seed(2024)
@@ -97,7 +101,21 @@ vel = [[float(s) for s in x] for x in vel]
 acc = [[float(s) for s in x] for x in acc]
 force = [[float(s) for s in x] for x in force]
 
-meta = torch.tensor(meta_info, device=device)
+
+def binary(num):
+    # IEEE 754
+    return ''.join('{:0>8b}'.format(c) for c in struct.pack('!f', num))
+
+
+for i in range(len(meta_info[:])):
+    m2 = []
+    for j in range(len(meta_info[0])):
+        m0 = [*binary(meta_info[i][j])]
+        m1 = [float(s) for s in m0]
+        m2.append(m1)
+    meta_info[i] = m2
+
+meta = torch.tensor(meta_info, device=device).reshape(1000, 9 * 32)
 coords = torch.tensor(pos, device=device)
 velocities = torch.tensor(vel, device=device)
 accelerations = torch.tensor(acc, device=device)
@@ -120,50 +138,54 @@ forces = torch.tensor(force, device=device)
 t_step = 4.89e-15
 
 model = AvatarUNRES(meta, coords, velocities, accelerations, forces).to(device)
-criterion = nn.MSELoss()
-optimizer = optim.Adam(model.parameters(), lr=0.01)
+criterion = nn.MSELoss(reduction='mean')
+optimizer = optim.Adam(model.parameters(), lr=1e-5)
 
 # Training loop
-
-
-indices = torch.randperm(meta.shape[0])
-train_size = int(0.9 * meta.shape[0])
+indices = torch.randperm(meta.shape[0]-1)
+train_size = int(0.8 * meta.shape[0])
 val_size = meta.shape[0] - train_size
 train_indices = indices[:train_size]
 val_indices = indices[train_size:]
 
-num_epochs = 6000
-batch_size = 50
+
+num_epochs = 15000
+batch_size = 25
 for epoch in range(num_epochs):
-    t = random.sample(range(0, meta.shape[0] - 2), batch_size)
-    # t_1 = [x + 1 for x in t]
+    # t = random.sample(range(0, meta.shape[0] - 1), batch_size)
+    t = torch.randperm(train_indices.numel())[:batch_size]
+    t_1 = [s.item() + 1 for s in t]
+
     bloss = []
     torch.set_grad_enabled(True)
-    for tstep in t:
-        t_1 = tstep + 1
-        preds = model(meta[tstep], coords[tstep], velocities[tstep], accelerations[tstep], forces[tstep])
-        target = torch.cat([coords[t_1], velocities[t_1], accelerations[t_1], forces[t_1]])
-        loss = criterion(preds, target)
-        bloss.append(loss.item())
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+    preds_train = model(meta[t], coords[t], velocities[t], accelerations[t], forces[t])
+    target_train = torch.cat([coords[t_1], velocities[t_1], accelerations[t_1], forces[t_1]], dim=1)
 
+    loss = criterion(preds_train, target_train)
+    bloss.append(loss.item())
     optimizer.zero_grad()
-    bloss = torch.tensor(sum(bloss) / batch_size, requires_grad=True)
-    bloss.backward()
+    loss.backward()
     optimizer.step()
+
+    # optimizer.zero_grad()
+    # bloss = torch.tensor(sum(bloss) / batch_size, requires_grad=True)
+    # bloss.backward()
+    # optimizer.step()
 
     # Print progress
     if (epoch) % 100 == 0:
         with torch.set_grad_enabled(False):
-            tval = random.sample(range(0, meta.shape[0] - 2), batch_size)
+            tval = val_indices
+            #tval = random.sample(range(0, meta.shape[0] - 1), batch_size)
+            tval_1 = [s.item() + 1 for s in tval]
             bbloss = []
-            loss = 0.
-            for tvalstep in tval:
-                tval_1 = tvalstep + 1
-                preds = model(meta[tvalstep], coords[tvalstep], velocities[tvalstep], accelerations[tvalstep], forces[tvalstep])
-                target = torch.cat([coords[tval_1], velocities[tval_1], accelerations[tval_1], forces[tval_1]])
-                loss += criterion(preds, target)
-            print(f'Epoch [{epoch + 1}/{num_epochs}],Train Loss: {bloss.item():.5f}, Validation Loss: {loss:.5f}')
+            preds_test = model(meta[tval], coords[tval], velocities[tval], accelerations[tval],
+                          forces[tval])
+            target_test = torch.cat([coords[tval_1], velocities[tval_1], accelerations[tval_1], forces[tval_1]], dim=1)
+            loss_val = criterion(preds_test, target_test)
+            print(f'Epoch [{epoch + 1}/{num_epochs}],Train Loss: {loss.item():.5f}, Validation Loss: {loss_val:.5f}')
 
+model.cpu()
+del model
+gc.collect()
+torch.cuda.empty_cache()
