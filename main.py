@@ -108,6 +108,7 @@ vel = [[float(s) for s in x] for x in vel]
 acc = [[float(s) for s in x] for x in acc]
 force = [[float(s) for s in x] for x in force]
 
+
 def binary(num):
     # IEEE 754
     return ''.join('{:0>8b}'.format(c) for c in struct.pack('!f', num))
@@ -134,26 +135,6 @@ velocities, velocities_test = velocities[:train_size], velocities[train_size:]
 accelerations, accelerations_test = accelerations[:train_size], accelerations[train_size:]
 forces, forces_test = forces[:train_size], forces[train_size:]
 
-# meta = normalize(meta, p=1.)
-# coords = normalize(coords, p=1.)
-# velocities = normalize(velocities, p=1.)
-# accelerations = normalize(accelerations, p=1.)
-# forces = normalize(forces, p=1.)
-
-######### proteinA.x file loading
-######### proteinA.txt inertia file loading
-# proteinA_inertia = open(path + "proteinA-inertia.txt", "r")
-# data_inertia = proteinA_inertia.read()
-# splited_data_inertia = data_inertia.split()
-# TODO: do this after successful model
-# print(splited_data_inertia)
-######### proteinA.txt inertia file loading
-t_step = 4.89e-15
-
-model = AvatarUNRES(meta, coords, velocities, accelerations, forces).to(device)
-criterion = nn.MSELoss(reduction='sum')
-optimizer = optim.Adam(model.parameters(), lr=1e-4)
-
 # Training loop
 indices = torch.randperm(meta.shape[0] - 1)
 train_sizev2 = int(0.95 * meta.shape[0])
@@ -161,15 +142,18 @@ val_size = meta.shape[0] - train_sizev2
 train_indices = indices[:train_sizev2]
 val_indices = indices[train_sizev2:]
 
-num_epochs = 1
+num_epochs = 10
 batch_size = 25
 bloss = []
 bbloss = []
+model = AvatarUNRES(meta, coords, velocities, accelerations, forces).to(device)
+criterion = nn.MSELoss(reduction='mean')
 
-if os.path.exists(model_path):
-    model.load_state_dict(torch.load(model_path))
-    # model.eval()
+# if os.path.exists(model_path):
+#     model.load_state_dict(torch.load(model_path))
+    # model = torch.load(model_path)
 
+optimizer = optim.Adam(model.parameters(), lr=1e-3)
 loss_idx = 0
 for epoch in range(num_epochs):
     torch.set_grad_enabled(True)
@@ -192,8 +176,9 @@ for epoch in range(num_epochs):
     loss_accelerations_seq = torch.tensor([0.], requires_grad=True, device=device)
     loss_forces_seq = torch.tensor([0.], requires_grad=True, device=device)
 
-    seq_len = random.randint(4, 50)
-    k = random.randint(0, coords.shape[0] - seq_len-1)
+    # seq_len = random.randint(4, 50)
+    seq_len = 20
+    k = random.randint(0, coords.shape[0] - seq_len - 1)
     c, v, a, f = torch.unsqueeze(coords[k], dim=0), torch.unsqueeze(velocities[k], dim=0), torch.unsqueeze(
         accelerations[k], dim=0), torch.unsqueeze(forces[k], dim=0)
     model.batch_size = 1
@@ -217,7 +202,7 @@ for epoch in range(num_epochs):
     separate_losess = [loss_c, loss_v, loss_a, loss_f]
 
     loss_idx = random.randint(0, 3)
-    loss = separate_losess[loss_idx] + loss_seq + criterion(preds_train, target_train)
+    loss = loss_seq + criterion(preds_train, target_train) + sum(separate_losess)
     bloss.append(loss.item())
     optimizer.zero_grad()
     loss.backward()
@@ -245,26 +230,28 @@ for epoch in range(num_epochs):
             print(f'Epoch [{epoch + 1}/{num_epochs}],Train Loss: {loss.item():.5f}, Validation Loss: {loss_val:.5f}')
 
 c, v, a, f = torch.unsqueeze(coords_test[0], dim=0), torch.unsqueeze(velocities_test[0], dim=0), torch.unsqueeze(
-    accelerations_test[0],
-    dim=0), torch.unsqueeze(
-    forces_test[0], dim=0)
+    accelerations_test[0],dim=0), torch.unsqueeze(forces_test[0], dim=0)
+
 pred_dynamics_pos = []
 pred_dynamics_vel = []
 pred_dynamics_acc = []
 pred_dynamics_force = []
 
-gtdlen = meta_test.shape[0]*1
+gtdlen = meta_test.shape[0] * 1
 model.batch_size = 1
 
 model.eval()
 start = time.time()
 with torch.set_grad_enabled(False):
     for i in range(int(gtdlen)):
+        c_old = c
         c, v, a, f = model(meta_test[i].unsqueeze(0), c, v, a, f)
+
         pred_dynamics_pos.append(c.detach().cpu().numpy())
         pred_dynamics_vel.append(v.detach().cpu().numpy())
         pred_dynamics_acc.append(a.detach().cpu().numpy())
         pred_dynamics_force.append(f.detach().cpu().numpy())
+
 end = time.time()
 print((end - start) / int(gtdlen))  # speed
 pred_dynamics_pos = np.array(pred_dynamics_pos).squeeze(1)
@@ -367,10 +354,10 @@ for i in range(int(gtdlen)):
     folding = prota.scatter(x, y, z, linewidth=linewidth, antialiased=False, s=marker_size, c="blue")
     folding_pred = prota.scatter(xp, yp, zp, linewidth=linewidth, antialiased=False, s=marker_size, c="orange")
 
-    ims.append([folding,folding_pred])
+    ims.append([folding, folding_pred])
 
 # ani = animation.ArtistAnimation(fig, ims, interval=30, blit=True, repeat=True)
-ani = animation.ArtistAnimation(fig, ims, interval=100, blit=True, repeat=True)
+ani = animation.ArtistAnimation(fig, ims, interval=30, blit=True, repeat=True)
 
 # ani.save("proteinA-folding.gif", dpi=300, writer=PillowWriter(fps=30))
 plt.show()
