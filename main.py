@@ -10,7 +10,8 @@ from statistics import mean
 import matplotlib
 import numpy as np
 import torch
-from matplotlib import pyplot as plt, cm
+from matplotlib import pyplot as plt, cm, animation
+from matplotlib.animation import PillowWriter
 from mpl_toolkits.mplot3d import axes3d
 from torch import nn, optim
 from torch.nn.functional import normalize
@@ -107,7 +108,6 @@ vel = [[float(s) for s in x] for x in vel]
 acc = [[float(s) for s in x] for x in acc]
 force = [[float(s) for s in x] for x in force]
 
-
 def binary(num):
     # IEEE 754
     return ''.join('{:0>8b}'.format(c) for c in struct.pack('!f', num))
@@ -126,6 +126,13 @@ coords = torch.tensor(pos, device=device)
 velocities = torch.tensor(vel, device=device)
 accelerations = torch.tensor(acc, device=device)
 forces = torch.tensor(force, device=device)
+
+train_size = int(0.9 * meta.shape[0])
+meta, meta_test = meta[:train_size], meta[train_size:]
+coords, coords_test = coords[:train_size], coords[train_size:]
+velocities, velocities_test = velocities[:train_size], velocities[train_size:]
+accelerations, accelerations_test = accelerations[:train_size], accelerations[train_size:]
+forces, forces_test = forces[:train_size], forces[train_size:]
 
 # meta = normalize(meta, p=1.)
 # coords = normalize(coords, p=1.)
@@ -149,12 +156,12 @@ optimizer = optim.Adam(model.parameters(), lr=1e-4)
 
 # Training loop
 indices = torch.randperm(meta.shape[0] - 1)
-train_size = int(0.9 * meta.shape[0])
-val_size = meta.shape[0] - train_size
-train_indices = indices[:train_size]
-val_indices = indices[train_size:]
+train_sizev2 = int(0.95 * meta.shape[0])
+val_size = meta.shape[0] - train_sizev2
+train_indices = indices[:train_sizev2]
+val_indices = indices[train_sizev2:]
 
-num_epochs = 100
+num_epochs = 1
 batch_size = 25
 bloss = []
 bbloss = []
@@ -185,12 +192,12 @@ for epoch in range(num_epochs):
     loss_accelerations_seq = torch.tensor([0.], requires_grad=True, device=device)
     loss_forces_seq = torch.tensor([0.], requires_grad=True, device=device)
 
-    c, v, a, f = torch.unsqueeze(coords[0], dim=0), torch.unsqueeze(velocities[0], dim=0), torch.unsqueeze(
-        accelerations[0], dim=0), torch.unsqueeze(forces[0], dim=0)
-
-    k = random.randint(0, len(pos) - 10)
+    seq_len = random.randint(4, 50)
+    k = random.randint(0, coords.shape[0] - seq_len-1)
+    c, v, a, f = torch.unsqueeze(coords[k], dim=0), torch.unsqueeze(velocities[k], dim=0), torch.unsqueeze(
+        accelerations[k], dim=0), torch.unsqueeze(forces[k], dim=0)
     model.batch_size = 1
-    for i in range(k, k + 10 - 1):
+    for i in range(k, k + seq_len):
         c_seq, v_seq, a_seq, f_seq = model(meta[i].unsqueeze(0), c, v, a, f)
         preds_train_seq = torch.cat([c_seq, v_seq, a_seq, f_seq], dim=1)
         target_train_seq = torch.cat(
@@ -217,7 +224,7 @@ for epoch in range(num_epochs):
     optimizer.step()
 
     # Print progress
-    if (epoch) % 100 == 0:
+    if (epoch) % 50 == 0:
         with torch.set_grad_enabled(False):
             model.batch_size = batch_size
             tval = val_indices
@@ -237,32 +244,34 @@ for epoch in range(num_epochs):
                     batch_size -= 1
             print(f'Epoch [{epoch + 1}/{num_epochs}],Train Loss: {loss.item():.5f}, Validation Loss: {loss_val:.5f}')
 
-c, v, a, f = torch.unsqueeze(coords[0], dim=0), torch.unsqueeze(velocities[0], dim=0), torch.unsqueeze(accelerations[0],
-                                                                                                       dim=0), torch.unsqueeze(
-    forces[0], dim=0)
+c, v, a, f = torch.unsqueeze(coords_test[0], dim=0), torch.unsqueeze(velocities_test[0], dim=0), torch.unsqueeze(
+    accelerations_test[0],
+    dim=0), torch.unsqueeze(
+    forces_test[0], dim=0)
 pred_dynamics_pos = []
 pred_dynamics_vel = []
 pred_dynamics_acc = []
 pred_dynamics_force = []
-gtdlen = len(pos) * 0.1
+
+gtdlen = meta_test.shape[0]*1
 model.batch_size = 1
+
 model.eval()
 start = time.time()
 with torch.set_grad_enabled(False):
     for i in range(int(gtdlen)):
-
-        c, v, a, f = model(meta[i].unsqueeze(0), c, v, a, f)
-
+        c, v, a, f = model(meta_test[i].unsqueeze(0), c, v, a, f)
         pred_dynamics_pos.append(c.detach().cpu().numpy())
         pred_dynamics_vel.append(v.detach().cpu().numpy())
         pred_dynamics_acc.append(a.detach().cpu().numpy())
         pred_dynamics_force.append(f.detach().cpu().numpy())
 end = time.time()
-print((end - start)/int(gtdlen))
-pred_dynamics_pos = np.array(pred_dynamics_pos)
-pred_dynamics_vel = np.array(pred_dynamics_vel)
-pred_dynamics_acc = np.array(pred_dynamics_acc)
-pred_dynamics_force = np.array(pred_dynamics_force)
+print((end - start) / int(gtdlen))  # speed
+pred_dynamics_pos = np.array(pred_dynamics_pos).squeeze(1)
+
+pred_dynamics_vel = np.array(pred_dynamics_vel).squeeze(1)
+pred_dynamics_acc = np.array(pred_dynamics_acc).squeeze(1)
+pred_dynamics_force = np.array(pred_dynamics_force).squeeze(1)
 
 ground_truth_dynamics_pos = []
 ground_truth_dynamics_vel = []
@@ -270,10 +279,10 @@ ground_truth_dynamics_acc = []
 ground_truth_dynamics_force = []
 
 for i in range(int(gtdlen)):
-    ground_truth_dynamics_pos.append(pos[i])
-    ground_truth_dynamics_vel.append(vel[i])
-    ground_truth_dynamics_acc.append(acc[i])
-    ground_truth_dynamics_force.append(force[i])
+    ground_truth_dynamics_pos.append(coords_test[i].cpu())
+    ground_truth_dynamics_vel.append(velocities_test[i].cpu())
+    ground_truth_dynamics_acc.append(accelerations_test[i].cpu())
+    ground_truth_dynamics_force.append(forces_test[i].cpu())
 
 ground_truth_dynamics_pos = np.array(ground_truth_dynamics_pos)
 ground_truth_dynamics_vel = np.array(ground_truth_dynamics_vel)
@@ -282,8 +291,9 @@ ground_truth_dynamics_force = np.array(ground_truth_dynamics_force)
 
 x = range(np.array(ground_truth_dynamics_pos).shape[1])
 y = range(int(gtdlen))
-fig = plt.figure(figsize=(8, 6))
-hp = fig.add_subplot(111, projection='3d')
+# fig = plt.figure(figsize=(8, 6))
+# plt.style.use('dark_background')
+# hp = fig.add_subplot(111, projection='3d')
 # hv = fig.add_subplot(222, projection='3d')
 # ha = fig.add_subplot(223, projection='3d')
 # hf = fig.add_subplot(224, projection='3d')
@@ -292,21 +302,19 @@ marker = '.'
 marker_size = 0.1
 linewidth = 0.1
 
-hp.scatter(X, Y, pred_dynamics_pos, linewidth=linewidth, antialiased=False, s=marker_size, c="orange")
+# hp.scatter(X, Y, pred_dynamics_pos, linewidth=linewidth, antialiased=False, s=marker_size, c="orange")
 # hv.scatter(X, Y, pred_dynamics_vel, linewidth=linewidth, antialiased=False, s=marker_size, c="orange")
 # ha.scatter(X, Y, pred_dynamics_acc, linewidth=linewidth, antialiased=False, s=marker_size, c="orange")
 # hf.scatter(X, Y, pred_dynamics_force, linewidth=linewidth, antialiased=False, s=marker_size, c="orange")
 
-hp.scatter(X, Y, ground_truth_dynamics_pos, linewidth=linewidth, antialiased=False, s=marker_size, c="blue")
+# hp.scatter(X, Y, ground_truth_dynamics_pos, linewidth=linewidth, antialiased=False, s=marker_size, c="blue")
 # hv.scatter(X, Y, ground_truth_dynamics_vel, linewidth=linewidth, antialiased=False, s=marker_size, c="blue")
 # ha.scatter(X, Y, ground_truth_dynamics_acc, linewidth=linewidth, antialiased=False, s=marker_size, c="blue")
 # hf.scatter(X, Y, ground_truth_dynamics_force, linewidth=linewidth, antialiased=False, s=marker_size, c="blue")
 
-hp.set_xlabel("Coordinates xyz")
-hp.set_ylabel("Time step")
-hp.set_zlabel("Coordinates values")
-
-
+# hp.set_xlabel("Coordinates xyz")
+# hp.set_ylabel("Time step")
+# hp.set_zlabel("Coordinates values")
 
 
 # plt.tight_layout(pad=-5.0, w_pad=-5.0, h_pad=-5.0)
@@ -318,10 +326,54 @@ hp.set_zlabel("Coordinates values")
 # ha.axis('off')
 # hf.grid(False)
 # hf.axis('off')
-plt.show()
+
+# plt.show()
 
 # time.sleep(1000)
+# animate protein coordinates
 
+fig = plt.figure(figsize=(8, 6))
+# plt.style.use('dark_background')
+prota = fig.add_subplot(111, projection='3d')
+prota.set_xlabel("x")
+prota.set_ylabel("y")
+prota.set_zlabel("z")
+marker_size = 1
+linewidth = 1
+ims = []
+
+for i in range(int(gtdlen)):
+    xx = 0
+    yy = 14
+    zz = 29
+    x, y, z, xp, yp, zp = [], [], [], [], [], []
+    for j in range(0, int(pred_dynamics_pos.shape[1] / 3)):
+        # print(pred_dynamics_pos.shape)
+        x.append(ground_truth_dynamics_pos[i, xx])
+        y.append(ground_truth_dynamics_pos[i, yy])
+        z.append(ground_truth_dynamics_pos[i, zz])
+        xp.append(pred_dynamics_pos[i, xx])
+        yp.append(pred_dynamics_pos[i, yy])
+        zp.append(pred_dynamics_pos[i, zz])
+
+        xx += 1
+        yy += 1
+        zz += 1
+        if zz % 15 == 0:
+            xx += 15
+            yy += 15
+            zz += 15
+
+    folding = prota.scatter(x, y, z, linewidth=linewidth, antialiased=False, s=marker_size, c="blue")
+    folding_pred = prota.scatter(xp, yp, zp, linewidth=linewidth, antialiased=False, s=marker_size, c="orange")
+
+    ims.append([folding,folding_pred])
+
+# ani = animation.ArtistAnimation(fig, ims, interval=30, blit=True, repeat=True)
+ani = animation.ArtistAnimation(fig, ims, interval=100, blit=True, repeat=True)
+
+# ani.save("proteinA-folding.gif", dpi=300, writer=PillowWriter(fps=30))
+plt.show()
 
 model.cpu()
 del model
