@@ -37,7 +37,7 @@ class SpectralConv1d(nn.Module):
         self.weights = nn.Parameter(self.scale * torch.rand(out_channels, self.modes, dtype=torch.cfloat))
 
     def compl_mul1d(self, input, weights):
-        out = torch.einsum("bi,ow->bw", real_imaginary_relu(input), real_imaginary_relu(weights))
+        out = torch.einsum("bi,ow->bw", input, weights)
         return out
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -64,7 +64,7 @@ class AvatarUNRES(nn.Module):
         self.modes = 16
         self.directions_num = 2
         self.lstm_layers = 2
-        self.drop = 0.
+        self.drop = 0.05
         self.bidirectional = True
         self.dynamics = self.pos.shape[1] + self.vel.shape[1] + self.acc.shape[1] + \
                         self.force.shape[1]
@@ -193,11 +193,13 @@ class AvatarUNRES(nn.Module):
 
     def forward(self, meta, pos, vel, acc, force, hc4lstm, b_st_flag=0):
         h0m, c0m, h0p, c0p, h0v, c0v, h0a, c0a, h0f, c0f = hc4lstm
+
         m = meta.unsqueeze(1)
         p = pos.unsqueeze(1)
         v = vel.unsqueeze(1)
         a = acc.unsqueeze(1)
         f = force.unsqueeze(1)
+
         # if b_st_flag == 1:
         #     m = torch.swapaxes(m, 0, 1)
         #     p = torch.swapaxes(m, 0, 1)

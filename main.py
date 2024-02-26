@@ -164,7 +164,7 @@ criterion = nn.MSELoss(reduction='mean')
 #     model.load_state_dict(torch.load(model_path))
 # model = torch.load(model_path)
 
-optimizer = optim.Adam(model.parameters(), lr=5e-4,weight_decay=1e-5)
+optimizer = optim.Adam(model.parameters(), lr=5e-4, weight_decay=1e-5)
 loss_idx = 0
 for epoch in range(num_epochs):
     torch.set_grad_enabled(True)
@@ -192,20 +192,24 @@ for epoch in range(num_epochs):
     # seq_len = random.randint(4, 50)
     seq_len = 50
     k = random.randint(0, coords.shape[0] - seq_len - 1)
-    c, v, a, f = coords[k:k + seq_len], velocities[k:k + seq_len], accelerations[k:k + seq_len], forces[k:k + seq_len]
+    seq_step_0 = k  # range(k, k + seq_len)
+    seq_step_1 = k + 1  # range(k + 1, k + seq_len + 1)
+    c, v, a, f = coords[seq_step_0].unsqueeze(0), velocities[seq_step_0].unsqueeze(0), accelerations[seq_step_0].unsqueeze(0), forces[seq_step_0].unsqueeze(0)
     model.batch_size = 1
-    hc4lstm = model.init_h0_c0ForLSTMs(seq_len)
-    # for i in range(k, k + seq_len):
-    c_seq, v_seq, a_seq, f_seq, _ = model(meta[k:k + seq_len], c, v, a, f, hc4lstm,1)
-    preds_train_seq = torch.cat([c_seq, v_seq, a_seq, f_seq], dim=1)
-    target_train_seq = torch.cat(
-        [coords[k + 1:k + seq_len + 1], velocities[k + 1:k + seq_len + 1], accelerations[k + 1:k + seq_len + 1],
-         forces[k + 1:k + seq_len + 1]], dim=1)
-    loss_seq = loss_seq + criterion(preds_train_seq, target_train_seq)
-    loss_coords_seq = loss_coords_seq + criterion(c_seq, coords[k + 1:k + seq_len + 1])
-    loss_velocities_seq = loss_velocities_seq + criterion(v_seq, velocities[k + 1:k + seq_len + 1])
-    loss_accelerations_seq = loss_accelerations_seq + criterion(a_seq, accelerations[k + 1:k + seq_len + 1])
-    loss_forces_seq = loss_forces_seq + criterion(f_seq, forces[k + 1:k + seq_len + 1])
+    hc4lstm = model.init_h0_c0ForLSTMs(model.batch_size)
+    for i in range(k, k + seq_len):
+        seq_step_0 = i
+        seq_step_1 = i + 1
+        c_seq, v_seq, a_seq, f_seq, hc4lstm = model(meta[seq_step_0].unsqueeze(0), c, v, a, f, hc4lstm, 1)
+        preds_train_seq = torch.cat([c_seq, v_seq, a_seq, f_seq], dim=1)
+        target_train_seq = torch.cat(
+            [coords[seq_step_1].unsqueeze(0), velocities[seq_step_1].unsqueeze(0), accelerations[seq_step_1].unsqueeze(0),
+             forces[seq_step_1].unsqueeze(0)], dim=1)
+        loss_seq = loss_seq + criterion(preds_train_seq, target_train_seq)
+        loss_coords_seq = loss_coords_seq + criterion(c_seq, coords[seq_step_1])
+        loss_velocities_seq = loss_velocities_seq + criterion(v_seq, velocities[seq_step_1])
+        loss_accelerations_seq = loss_accelerations_seq + criterion(a_seq, accelerations[seq_step_1])
+        loss_forces_seq = loss_forces_seq + criterion(f_seq, forces[seq_step_1])
     # SEQUENTIAL LEARNING WITH BATCH SIZE 1
 
     loss_c = criterion(c_train, coords[t_1]) + loss_coords_seq
