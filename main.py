@@ -1,32 +1,29 @@
-import math
+import os
+import gc
 import os
 import random
 import struct
 import sys
 import sysconfig
 import time
-from statistics import mean
 
 import matplotlib
 import numpy as np
 import torch
-from matplotlib import pyplot as plt, cm, animation
-from matplotlib.animation import PillowWriter
-from mpl_toolkits.mplot3d import axes3d
+from matplotlib import pyplot as plt, animation
 from torch import nn, optim
-from torch.nn.functional import normalize
-
 from AVATAR import AvatarUNRES
-import gc
 
 random.seed(2024)
 np.random.seed(2024)
 torch.manual_seed(2024)
+# mplab = importlib.util.spec_from_file_location("mplab.name", "C:\Python311\Lib\site-packages\mayavi\mlab.py")
 
 path = './proteinA/'
 model_path = './model.pth'
 matplotlib.use('TkAgg')
 
+# sys.path.append('C:\Python311\Lib\site-packages\mayavi')
 print(sysconfig.get_paths()["purelib"])
 sys.path.append('C:/Python311/Lib/site-packages')
 if torch.cuda.is_available():
@@ -129,6 +126,20 @@ accelerations = torch.tensor(acc, device=device)
 forces = torch.tensor(force, device=device)
 
 train_size = int(0.9 * meta.shape[0])
+
+outmap_min, _ = torch.min(coords, dim=1, keepdim=True)
+outmap_max, _ = torch.max(coords, dim=1, keepdim=True)
+coords = (coords - outmap_min) / (outmap_max - outmap_min)
+outmap_min, _ = torch.min(velocities, dim=1, keepdim=True)
+outmap_max, _ = torch.max(velocities, dim=1, keepdim=True)
+velocities = (velocities - outmap_min) / (outmap_max - outmap_min)
+outmap_min, _ = torch.min(accelerations, dim=1, keepdim=True)
+outmap_max, _ = torch.max(accelerations, dim=1, keepdim=True)
+accelerations = (accelerations - outmap_min) / (outmap_max - outmap_min)
+outmap_min, _ = torch.min(forces, dim=1, keepdim=True)
+outmap_max, _ = torch.max(forces, dim=1, keepdim=True)
+forces = (forces - outmap_min) / (outmap_max - outmap_min)
+
 meta, meta_test = meta[:train_size], meta[train_size:]
 coords, coords_test = coords[:train_size], coords[train_size:]
 velocities, velocities_test = velocities[:train_size], velocities[train_size:]
@@ -142,7 +153,7 @@ val_size = meta.shape[0] - train_sizev2
 train_indices = indices[:train_sizev2]
 val_indices = indices[train_sizev2:]
 
-num_epochs = 10
+num_epochs = 1000
 batch_size = 25
 bloss = []
 bbloss = []
@@ -151,25 +162,27 @@ criterion = nn.MSELoss(reduction='mean')
 
 # if os.path.exists(model_path):
 #     model.load_state_dict(torch.load(model_path))
-    # model = torch.load(model_path)
+# model = torch.load(model_path)
 
-optimizer = optim.Adam(model.parameters(), lr=1e-3)
+optimizer = optim.Adam(model.parameters(), lr=5e-4,weight_decay=1e-5)
 loss_idx = 0
 for epoch in range(num_epochs):
     torch.set_grad_enabled(True)
     model.train()
     model.batch_size = batch_size
-    # RANDOM POINTS DYNAMIC LEARNING
+    # RANDOM POINTS DYNAMIC LEARNING WITH STEP SIZE 1
     # t = random.sample(range(0, meta.shape[0] - 1), batch_size)
     t = torch.randperm(train_indices.numel())[:batch_size]
     t_1 = [s.item() + 1 for s in t]
-    c_train, v_train, a_train, f_train = model(meta[t], coords[t], velocities[t], accelerations[t], forces[t])
+    hc4lstm = model.init_h0_c0ForLSTMs(model.batch_size)
+    c_train, v_train, a_train, f_train, _ = model(meta[t], coords[t], velocities[t], accelerations[t], forces[t],
+                                                  hc4lstm)
     preds_train = torch.cat([c_train, v_train, a_train, f_train], dim=1)
     target_train = torch.cat([coords[t_1], velocities[t_1], accelerations[t_1], forces[t_1]], dim=1)
-    # RANDOM POINTS DYNAMIC LEARNING
+    # RANDOM POINTS DYNAMIC LEARNING WITH STEP SIZE 1
 
     # if (epoch) % 50 == 0:
-    # Sequential learning
+    # SEQUENTIAL LEARNING WITH BATCH SIZE 1
     loss_seq = torch.tensor([0.], requires_grad=True, device=device)
     loss_coords_seq = torch.tensor([0.], requires_grad=True, device=device)
     loss_velocities_seq = torch.tensor([0.], requires_grad=True, device=device)
@@ -177,23 +190,23 @@ for epoch in range(num_epochs):
     loss_forces_seq = torch.tensor([0.], requires_grad=True, device=device)
 
     # seq_len = random.randint(4, 50)
-    seq_len = 20
+    seq_len = 50
     k = random.randint(0, coords.shape[0] - seq_len - 1)
-    c, v, a, f = torch.unsqueeze(coords[k], dim=0), torch.unsqueeze(velocities[k], dim=0), torch.unsqueeze(
-        accelerations[k], dim=0), torch.unsqueeze(forces[k], dim=0)
+    c, v, a, f = coords[k:k + seq_len], velocities[k:k + seq_len], accelerations[k:k + seq_len], forces[k:k + seq_len]
     model.batch_size = 1
-    for i in range(k, k + seq_len):
-        c_seq, v_seq, a_seq, f_seq = model(meta[i].unsqueeze(0), c, v, a, f)
-        preds_train_seq = torch.cat([c_seq, v_seq, a_seq, f_seq], dim=1)
-        target_train_seq = torch.cat(
-            [torch.unsqueeze(coords[i + 1], dim=0), torch.unsqueeze(velocities[i + 1], dim=0),
-             torch.unsqueeze(accelerations[i + 1], dim=0), torch.unsqueeze(forces[i + 1], dim=0)], dim=1)
-        loss_seq = loss_seq + criterion(preds_train_seq, target_train_seq)
-        loss_coords_seq = loss_coords_seq + criterion(c_seq, torch.unsqueeze(coords[i + 1], dim=0))
-        loss_velocities_seq = loss_velocities_seq + criterion(v_seq, torch.unsqueeze(velocities[i + 1], dim=0))
-        loss_accelerations_seq = loss_accelerations_seq + criterion(a_seq, torch.unsqueeze(accelerations[i + 1], dim=0))
-        loss_forces_seq = loss_forces_seq + criterion(f_seq, torch.unsqueeze(forces[i + 1], dim=0))
-        # Sequential learning
+    hc4lstm = model.init_h0_c0ForLSTMs(seq_len)
+    # for i in range(k, k + seq_len):
+    c_seq, v_seq, a_seq, f_seq, _ = model(meta[k:k + seq_len], c, v, a, f, hc4lstm,1)
+    preds_train_seq = torch.cat([c_seq, v_seq, a_seq, f_seq], dim=1)
+    target_train_seq = torch.cat(
+        [coords[k + 1:k + seq_len + 1], velocities[k + 1:k + seq_len + 1], accelerations[k + 1:k + seq_len + 1],
+         forces[k + 1:k + seq_len + 1]], dim=1)
+    loss_seq = loss_seq + criterion(preds_train_seq, target_train_seq)
+    loss_coords_seq = loss_coords_seq + criterion(c_seq, coords[k + 1:k + seq_len + 1])
+    loss_velocities_seq = loss_velocities_seq + criterion(v_seq, velocities[k + 1:k + seq_len + 1])
+    loss_accelerations_seq = loss_accelerations_seq + criterion(a_seq, accelerations[k + 1:k + seq_len + 1])
+    loss_forces_seq = loss_forces_seq + criterion(f_seq, forces[k + 1:k + seq_len + 1])
+    # SEQUENTIAL LEARNING WITH BATCH SIZE 1
 
     loss_c = criterion(c_train, coords[t_1]) + loss_coords_seq
     loss_v = criterion(v_train, velocities[t_1]) + loss_velocities_seq
@@ -209,28 +222,30 @@ for epoch in range(num_epochs):
     optimizer.step()
 
     # Print progress
-    if (epoch) % 50 == 0:
+    if (epoch) % 25 == 0:
         with torch.set_grad_enabled(False):
-            model.batch_size = batch_size
             tval = val_indices
             # tval = random.sample(range(0, meta.shape[0] - 1), batch_size)
             tval_1 = [s.item() + 1 for s in tval]
+            model.batch_size = coords[tval].shape[0]
 
-            c_test, v_test, a_test, f_test = model(meta[tval], coords[tval], velocities[tval], accelerations[tval],
-                                                   forces[tval])
+            hc4lstm = model.init_h0_c0ForLSTMs(model.batch_size)
+            c_test, v_test, a_test, f_test, _ = model(meta[tval], coords[tval], velocities[tval],
+                                                      accelerations[tval],
+                                                      forces[tval], hc4lstm)
             preds_test = torch.cat([c_test, v_test, a_test, f_test], dim=1)
             target_test = torch.cat([coords[tval_1], velocities[tval_1], accelerations[tval_1], forces[tval_1]], dim=1)
             loss_val = criterion(preds_test, target_test)
             bbloss.append(loss_val)
             if epoch > 100 and loss_val < max(bbloss) and loss < max(bloss):
                 torch.save(model.state_dict(), model_path)
-                batch_size += 1
-                if batch_size > 100:
-                    batch_size -= 1
+                # batch_size += 1
+                # if batch_size > 100:
+                #     batch_size -= 1
             print(f'Epoch [{epoch + 1}/{num_epochs}],Train Loss: {loss.item():.5f}, Validation Loss: {loss_val:.5f}')
 
 c, v, a, f = torch.unsqueeze(coords_test[0], dim=0), torch.unsqueeze(velocities_test[0], dim=0), torch.unsqueeze(
-    accelerations_test[0],dim=0), torch.unsqueeze(forces_test[0], dim=0)
+    accelerations_test[0], dim=0), torch.unsqueeze(forces_test[0], dim=0)
 
 pred_dynamics_pos = []
 pred_dynamics_vel = []
@@ -239,14 +254,13 @@ pred_dynamics_force = []
 
 gtdlen = meta_test.shape[0] * 1
 model.batch_size = 1
+hc4lstm = model.init_h0_c0ForLSTMs(model.batch_size)
 
 model.eval()
 start = time.time()
 with torch.set_grad_enabled(False):
     for i in range(int(gtdlen)):
-        c_old = c
-        c, v, a, f = model(meta_test[i].unsqueeze(0), c, v, a, f)
-
+        c, v, a, f, hc4lstm = model(meta_test[i].unsqueeze(0), c, v, a, f, hc4lstm)
         pred_dynamics_pos.append(c.detach().cpu().numpy())
         pred_dynamics_vel.append(v.detach().cpu().numpy())
         pred_dynamics_acc.append(a.detach().cpu().numpy())
@@ -319,8 +333,8 @@ linewidth = 0.1
 # time.sleep(1000)
 # animate protein coordinates
 
-fig = plt.figure(figsize=(8, 6))
-# plt.style.use('dark_background')
+fig = plt.figure()
+plt.style.use('dark_background')
 prota = fig.add_subplot(111, projection='3d')
 prota.set_xlabel("x")
 prota.set_ylabel("y")
@@ -329,6 +343,19 @@ marker_size = 1
 linewidth = 1
 ims = []
 
+############# MLAB
+# fig = mlab.figure()
+# x = np.random.rand(int(ground_truth_dynamics_pos.shape[1] / 3))
+# y = np.random.rand(int(ground_truth_dynamics_pos.shape[1] / 3))
+# z = np.random.rand(int(ground_truth_dynamics_pos.shape[1] / 3))
+# xp = np.random.rand(int(ground_truth_dynamics_pos.shape[1] / 3))
+# yp = np.random.rand(int(ground_truth_dynamics_pos.shape[1] / 3))
+# zp = np.random.rand(int(ground_truth_dynamics_pos.shape[1] / 3))
+# plt = mlab.points3d(x, y, z, color=(1, 0, 0), scale_factor=0.07)
+
+# @mlab.animate()
+# def update_anim():
+############# MLAB
 for i in range(int(gtdlen)):
     xx = 0
     yy = 14
@@ -352,12 +379,18 @@ for i in range(int(gtdlen)):
             zz += 15
 
     folding = prota.scatter(x, y, z, linewidth=linewidth, antialiased=False, s=marker_size, c="blue")
-    folding_pred = prota.scatter(xp, yp, zp, linewidth=linewidth, antialiased=False, s=marker_size, c="orange")
+    folding_pred = prota.scatter(xp, yp, zp, linewidth=linewidth, antialiased=False, s=marker_size, c="red")
 
     ims.append([folding, folding_pred])
 
-# ani = animation.ArtistAnimation(fig, ims, interval=30, blit=True, repeat=True)
-ani = animation.ArtistAnimation(fig, ims, interval=30, blit=True, repeat=True)
+    # plt.mlab_source.set(x=xp, y=yp, z=zp)
+    # yield
+
+#
+# update_anim()
+# mlab.show()
+
+ani = animation.ArtistAnimation(fig, ims, interval=50, blit=True, repeat=True)
 
 # ani.save("proteinA-folding.gif", dpi=300, writer=PillowWriter(fps=30))
 plt.show()
