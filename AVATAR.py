@@ -5,7 +5,7 @@ from torch import nn
 from ncps.torch import LTC
 from ncps.wirings import AutoNCP
 from torch.nn.functional import relu
-
+from htm_pytorch import HTMAttention
 if torch.cuda.is_available():
     device = torch.device('cuda')  # GPU available
 else:
@@ -61,7 +61,7 @@ class AvatarUNRES(nn.Module):
         self.force = force
         self.uplift_dim = 1000
         self.drop_dim = 1000
-        self.modes = 16
+        self.modes = 32
         self.directions_num = 2
         self.lstm_layers = 2
         self.drop = 0.05

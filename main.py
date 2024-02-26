@@ -11,6 +11,7 @@ import matplotlib
 import numpy as np
 import torch
 from matplotlib import pyplot as plt, animation
+from matplotlib.animation import PillowWriter
 from torch import nn, optim
 from AVATAR import AvatarUNRES
 
@@ -153,18 +154,18 @@ val_size = meta.shape[0] - train_sizev2
 train_indices = indices[:train_sizev2]
 val_indices = indices[train_sizev2:]
 
-num_epochs = 1000
-batch_size = 25
+num_epochs = 3000
+batch_size = 1
 bloss = []
 bbloss = []
 model = AvatarUNRES(meta, coords, velocities, accelerations, forces).to(device)
 criterion = nn.MSELoss(reduction='mean')
 
-# if os.path.exists(model_path):
-#     model.load_state_dict(torch.load(model_path))
+if os.path.exists(model_path):
+    model.load_state_dict(torch.load(model_path))
 # model = torch.load(model_path)
 
-optimizer = optim.Adam(model.parameters(), lr=5e-4, weight_decay=1e-5)
+optimizer = optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-5)
 loss_idx = 0
 for epoch in range(num_epochs):
     torch.set_grad_enabled(True)
@@ -190,7 +191,7 @@ for epoch in range(num_epochs):
     loss_forces_seq = torch.tensor([0.], requires_grad=True, device=device)
 
     # seq_len = random.randint(4, 50)
-    seq_len = 10
+    seq_len = 20
     k = random.randint(0, coords.shape[0] - seq_len - 1)
     seq_step_0 = k  # range(k, k + seq_len)
     seq_step_1 = k + 1  # range(k + 1, k + seq_len + 1)
@@ -396,7 +397,7 @@ for i in range(int(gtdlen)):
 
 ani = animation.ArtistAnimation(fig, ims, interval=50, blit=True, repeat=True)
 
-# ani.save("proteinA-folding.gif", dpi=300, writer=PillowWriter(fps=30))
+ani.save("proteinA-folding_b1_s10.gif", dpi=300, writer=PillowWriter(fps=30))
 plt.show()
 
 model.cpu()
