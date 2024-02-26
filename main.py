@@ -190,7 +190,7 @@ for epoch in range(num_epochs):
     loss_forces_seq = torch.tensor([0.], requires_grad=True, device=device)
 
     # seq_len = random.randint(4, 50)
-    seq_len = 50
+    seq_len = 10
     k = random.randint(0, coords.shape[0] - seq_len - 1)
     seq_step_0 = k  # range(k, k + seq_len)
     seq_step_1 = k + 1  # range(k + 1, k + seq_len + 1)
@@ -206,10 +206,10 @@ for epoch in range(num_epochs):
             [coords[seq_step_1].unsqueeze(0), velocities[seq_step_1].unsqueeze(0), accelerations[seq_step_1].unsqueeze(0),
              forces[seq_step_1].unsqueeze(0)], dim=1)
         loss_seq = loss_seq + criterion(preds_train_seq, target_train_seq)
-        loss_coords_seq = loss_coords_seq + criterion(c_seq, coords[seq_step_1])
-        loss_velocities_seq = loss_velocities_seq + criterion(v_seq, velocities[seq_step_1])
-        loss_accelerations_seq = loss_accelerations_seq + criterion(a_seq, accelerations[seq_step_1])
-        loss_forces_seq = loss_forces_seq + criterion(f_seq, forces[seq_step_1])
+        loss_coords_seq = loss_coords_seq + criterion(c_seq, coords[seq_step_1].unsqueeze(0))
+        loss_velocities_seq = loss_velocities_seq + criterion(v_seq, velocities[seq_step_1].unsqueeze(0))
+        loss_accelerations_seq = loss_accelerations_seq + criterion(a_seq, accelerations[seq_step_1].unsqueeze(0))
+        loss_forces_seq = loss_forces_seq + criterion(f_seq, forces[seq_step_1].unsqueeze(0))
     # SEQUENTIAL LEARNING WITH BATCH SIZE 1
 
     loss_c = criterion(c_train, coords[t_1]) + loss_coords_seq
