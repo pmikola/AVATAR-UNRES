@@ -154,15 +154,15 @@ val_size = meta.shape[0] - train_sizev2
 train_indices = indices[:train_sizev2]
 val_indices = indices[train_sizev2:]
 
-num_epochs = 3000
-batch_size = 1
+num_epochs = 1000
+batch_size = 25
 bloss = []
 bbloss = []
 model = AvatarUNRES(meta, coords, velocities, accelerations, forces).to(device)
 criterion = nn.MSELoss(reduction='mean')
 
-if os.path.exists(model_path):
-    model.load_state_dict(torch.load(model_path))
+# if os.path.exists(model_path):
+#     model.load_state_dict(torch.load(model_path))
 # model = torch.load(model_path)
 
 optimizer = optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-5)
@@ -175,9 +175,7 @@ for epoch in range(num_epochs):
     # t = random.sample(range(0, meta.shape[0] - 1), batch_size)
     t = torch.randperm(train_indices.numel())[:batch_size]
     t_1 = [s.item() + 1 for s in t]
-    hc4lstm = model.init_h0_c0ForLSTMs(model.batch_size)
-    c_train, v_train, a_train, f_train, _ = model(meta[t], coords[t], velocities[t], accelerations[t], forces[t],
-                                                  hc4lstm)
+    c_train, v_train, a_train, f_train = model(meta[t], coords[t], velocities[t], accelerations[t], forces[t])
     preds_train = torch.cat([c_train, v_train, a_train, f_train], dim=1)
     target_train = torch.cat([coords[t_1], velocities[t_1], accelerations[t_1], forces[t_1]], dim=1)
     # RANDOM POINTS DYNAMIC LEARNING WITH STEP SIZE 1
@@ -197,11 +195,10 @@ for epoch in range(num_epochs):
     seq_step_1 = k + 1  # range(k + 1, k + seq_len + 1)
     c, v, a, f = coords[seq_step_0].unsqueeze(0), velocities[seq_step_0].unsqueeze(0), accelerations[seq_step_0].unsqueeze(0), forces[seq_step_0].unsqueeze(0)
     model.batch_size = 1
-    hc4lstm = model.init_h0_c0ForLSTMs(model.batch_size)
     for i in range(k, k + seq_len):
         seq_step_0 = i
         seq_step_1 = i + 1
-        c_seq, v_seq, a_seq, f_seq, hc4lstm = model(meta[seq_step_0].unsqueeze(0), c, v, a, f, hc4lstm, 1)
+        c_seq, v_seq, a_seq, f_seq = model(meta[seq_step_0].unsqueeze(0), c, v, a, f)
         preds_train_seq = torch.cat([c_seq, v_seq, a_seq, f_seq], dim=1)
         target_train_seq = torch.cat(
             [coords[seq_step_1].unsqueeze(0), velocities[seq_step_1].unsqueeze(0), accelerations[seq_step_1].unsqueeze(0),
@@ -229,15 +226,15 @@ for epoch in range(num_epochs):
     # Print progress
     if (epoch) % 25 == 0:
         with torch.set_grad_enabled(False):
+            model.eval()
             tval = val_indices
             # tval = random.sample(range(0, meta.shape[0] - 1), batch_size)
             tval_1 = [s.item() + 1 for s in tval]
             model.batch_size = coords[tval].shape[0]
 
-            hc4lstm = model.init_h0_c0ForLSTMs(model.batch_size)
-            c_test, v_test, a_test, f_test, _ = model(meta[tval], coords[tval], velocities[tval],
+            c_test, v_test, a_test, f_test = model(meta[tval], coords[tval], velocities[tval],
                                                       accelerations[tval],
-                                                      forces[tval], hc4lstm)
+                                                      forces[tval])
             preds_test = torch.cat([c_test, v_test, a_test, f_test], dim=1)
             target_test = torch.cat([coords[tval_1], velocities[tval_1], accelerations[tval_1], forces[tval_1]], dim=1)
             loss_val = criterion(preds_test, target_test)
@@ -259,13 +256,12 @@ pred_dynamics_force = []
 
 gtdlen = meta_test.shape[0] * 1
 model.batch_size = 1
-hc4lstm = model.init_h0_c0ForLSTMs(model.batch_size)
 
 model.eval()
 start = time.time()
 with torch.set_grad_enabled(False):
     for i in range(int(gtdlen)):
-        c, v, a, f, hc4lstm = model(meta_test[i].unsqueeze(0), c, v, a, f, hc4lstm)
+        c, v, a, f, hc4lstm = model(meta_test[i].unsqueeze(0), c, v, a, f)
         pred_dynamics_pos.append(c.detach().cpu().numpy())
         pred_dynamics_vel.append(v.detach().cpu().numpy())
         pred_dynamics_acc.append(a.detach().cpu().numpy())
@@ -397,7 +393,7 @@ for i in range(int(gtdlen)):
 
 ani = animation.ArtistAnimation(fig, ims, interval=50, blit=True, repeat=True)
 
-ani.save("proteinA-folding_b1_s10.gif", dpi=300, writer=PillowWriter(fps=30))
+# ani.save("proteinA-folding.gif", dpi=300, writer=PillowWriter(fps=30))
 plt.show()
 
 model.cpu()

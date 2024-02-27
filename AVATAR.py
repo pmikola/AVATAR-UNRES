@@ -1,15 +1,103 @@
 import gc
 
 import torch.nn
+from pytorch_tcn import TCN
 from torch import nn
 from ncps.torch import LTC
 from ncps.wirings import AutoNCP
 from torch.nn.functional import relu
 from htm_pytorch import HTMAttention
+import torch.nn.functional as F
+
 if torch.cuda.is_available():
-    device = torch.device('cuda')  # GPU available
+    device = torch.device('cuda')
 else:
-    device = torch.device('cpu')  # No GPU available, fallback to CPU
+    device = torch.device('cpu')
+torch.autograd.set_detect_anomaly(True)
+
+
+class TCN(nn.Module):
+    def __init__(self, features, output_size, layers=2, kernel_s=3, filters=2, dropout=0.1):
+        super(TCN, self).__init__()
+        self.output_size = output_size
+        self.features = features
+        self.layers = layers
+        self.kernel_s = kernel_s
+        self.filters = filters
+        self.dropout = dropout
+
+        self.conv1 = nn.Conv1d(1, self.filters, kernel_size=(kernel_s,), dilation=1,
+                               padding=(kernel_s - 1) // 2)
+        # self.conv1 = nn.Conv1d(self.features, self.filters, kernel_size=(kernel_s, kernel_s), dilation=(1, 1),
+        #                        padding=(kernel_s - 1) // 2, stride=(1,))
+        self.bn1 = nn.BatchNorm1d(self.filters)
+        self.dropout1 = nn.Dropout(self.dropout)
+
+        self.conv2 = nn.Conv1d(self.filters, self.filters, kernel_size=(kernel_s,), dilation=1,
+                               padding=(kernel_s - 1) // 2)
+        self.bn2 = nn.BatchNorm1d(self.filters)
+        self.dropout2 = nn.Dropout(self.dropout)
+
+        self.conv_1x1 = nn.Conv1d(1, self.filters, kernel_size=(kernel_s,), padding=(kernel_s - 1) // 2)
+
+        self.convs = nn.ModuleList()
+        self.bns = nn.ModuleList()
+        self.dropouts = nn.ModuleList()
+        self.convs2 = nn.ModuleList()
+        self.bns2 = nn.ModuleList()
+        self.dropouts2 = nn.ModuleList()
+        self.convs_1x1 = nn.ModuleList()
+
+        for i in range(layers - 1):
+            dilation_factor = 2 ** (i + 1)
+            self.convs.append(
+                nn.Conv1d(self.filters, self.filters, kernel_size=(kernel_s,), dilation=dilation_factor,
+                          padding=(kernel_s - 1) * dilation_factor // 2))
+            self.bns.append(nn.BatchNorm1d(self.filters))
+            self.convs2.append(
+                nn.Conv1d(self.filters, self.filters, kernel_size=(kernel_s,), dilation=dilation_factor,
+                          padding=(kernel_s - 1) * dilation_factor // 2))
+            self.bns2.append(nn.BatchNorm1d(self.filters))
+            self.convs_1x1.append(
+                nn.Conv1d(self.filters, self.filters, kernel_size=(kernel_s,), dilation=dilation_factor * 2,
+                          padding=(kernel_s - 1) * dilation_factor))
+
+        self.out = nn.Linear(self.features, self.output_size)
+
+    def forward(self, x):
+        # x = torch.swapaxes(x, 2, 1)
+        res = self.conv_1x1(x)  # optional?
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = F.dropout(x, p=self.dropout, training=self.training)
+        x = torch.relu(x)
+
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x = F.dropout(x, p=self.dropout, training=self.training)
+        o = torch.relu(x)
+
+        x = o + res
+
+        for i in range(self.layers - 1):
+            res = self.convs_1x1[i](x)
+            x = self.convs[i](x)
+            x = self.bns[i](x)
+            x = F.dropout(x, p=self.dropout, training=self.training)
+            x = torch.relu(x)
+            x = self.convs2[i](x)
+            x = self.bns2[i](x)
+            x = F.dropout(x, p=self.dropout, training=self.training)
+            o = torch.relu(x)
+            # print(x.shape, i)
+            x = o + res
+            x = torch.relu(x)
+
+        x = x[:, -1, :]
+
+        x = torch.relu(self.out(x))
+        # x = F.softmax(x, dim=1)
+        return x
 
 
 # class dynamicAct(nn.Module):
@@ -25,6 +113,7 @@ else:
 #         return torch.tensor(c[0], device=device)
 def real_imaginary_relu(z):
     return relu(z.real) + 1.j * relu(z.imag)
+
 
 class SpectralConv1d(nn.Module):
     def __init__(self, in_channels: int, out_channels: int, modes: int):
@@ -62,34 +151,40 @@ class AvatarUNRES(nn.Module):
         self.uplift_dim = 1000
         self.drop_dim = 1000
         self.modes = 32
-        self.directions_num = 2
+        self.directions_num = 1
         self.lstm_layers = 2
         self.drop = 0.05
         self.bidirectional = True
         self.dynamics = self.pos.shape[1] + self.vel.shape[1] + self.acc.shape[1] + \
                         self.force.shape[1]
 
-        self.LSTM_meta = nn.LSTM(input_size=self.meta.shape[1], hidden_size=self.meta.shape[1],
-                                 num_layers=self.lstm_layers,
-                                 batch_first=True, bidirectional=self.bidirectional, dropout=self.drop)
-        self.LSTM_pos = nn.LSTM(input_size=self.pos.shape[1], hidden_size=self.pos.shape[1],
-                                num_layers=self.lstm_layers,
-                                batch_first=True, bidirectional=self.bidirectional, dropout=self.drop)
-        self.LSTM_vel = nn.LSTM(input_size=self.vel.shape[1], hidden_size=self.vel.shape[1],
-                                num_layers=self.lstm_layers,
-                                batch_first=True, bidirectional=self.bidirectional, dropout=self.drop)
-        self.LSTM_acc = nn.LSTM(input_size=self.acc.shape[1], hidden_size=self.acc.shape[1],
-                                num_layers=self.lstm_layers,
-                                batch_first=True, bidirectional=self.bidirectional, dropout=self.drop)
-        self.LSTM_force = nn.LSTM(input_size=self.force.shape[1], hidden_size=self.force.shape[1],
-                                  num_layers=self.lstm_layers,
-                                  batch_first=True, bidirectional=self.bidirectional, dropout=self.drop)
+        # self.LSTM_meta = nn.LSTM(input_size=self.meta.shape[1], hidden_size=self.meta.shape[1],
+        #                          num_layers=self.lstm_layers,
+        #                          batch_first=True, bidirectional=self.bidirectional, dropout=self.drop)
+        # self.LSTM_pos = nn.LSTM(input_size=self.pos.shape[1], hidden_size=self.pos.shape[1],
+        #                         num_layers=self.lstm_layers,
+        #                         batch_first=True, bidirectional=self.bidirectional, dropout=self.drop)
+        # self.LSTM_vel = nn.LSTM(input_size=self.vel.shape[1], hidden_size=self.vel.shape[1],
+        #                         num_layers=self.lstm_layers,
+        #                         batch_first=True, bidirectional=self.bidirectional, dropout=self.drop)
+        # self.LSTM_acc = nn.LSTM(input_size=self.acc.shape[1], hidden_size=self.acc.shape[1],
+        #                         num_layers=self.lstm_layers,
+        #                         batch_first=True, bidirectional=self.bidirectional, dropout=self.drop)
+        # self.LSTM_force = nn.LSTM(input_size=self.force.shape[1], hidden_size=self.force.shape[1],
+        #                           num_layers=self.lstm_layers,
+        #                           batch_first=True, bidirectional=self.bidirectional, dropout=self.drop)
 
         self.uplift_meta = nn.Linear(self.meta.shape[1] * self.directions_num, self.uplift_dim, bias=True)
         self.uplift_pos = nn.Linear(self.pos.shape[1] * self.directions_num, self.uplift_dim, bias=True)
         self.uplift_vel = nn.Linear(self.vel.shape[1] * self.directions_num, self.uplift_dim, bias=True)
         self.uplift_acc = nn.Linear(self.acc.shape[1] * self.directions_num, self.uplift_dim, bias=True)
         self.uplift_force = nn.Linear(self.force.shape[1] * self.directions_num, self.uplift_dim, bias=True)
+
+        self.tcnm = TCN(self.meta.shape[1], self.meta.shape[1])
+        self.tcnp = TCN(self.pos.shape[1], self.pos.shape[1])
+        self.tcnv = TCN(self.vel.shape[1], self.vel.shape[1])
+        self.tcna = TCN(self.acc.shape[1], self.acc.shape[1])
+        self.tcnf = TCN(self.force.shape[1], self.force.shape[1])
 
         self.spectralConvp0 = SpectralConv1d(self.uplift_dim, self.uplift_dim, self.modes)
         self.wp0 = nn.Linear(self.uplift_dim, self.uplift_dim)
@@ -143,14 +238,20 @@ class AvatarUNRES(nn.Module):
         # self.liquid0 = LTC(self.drop_dim, self.drop_dim)
         self.common_output = nn.Linear(self.drop_dim, self.dynamics, bias=True)
 
-        self.pos_out = nn.LSTM(input_size=self.dynamics, hidden_size=self.pos.shape[1], num_layers=self.lstm_layers,
-                               batch_first=True, bidirectional=self.bidirectional, dropout=self.drop)
-        self.vel_out = nn.LSTM(input_size=self.dynamics, hidden_size=self.vel.shape[1], num_layers=self.lstm_layers,
-                               batch_first=True, bidirectional=self.bidirectional, dropout=self.drop)
-        self.acc_out = nn.LSTM(input_size=self.dynamics, hidden_size=self.acc.shape[1], num_layers=self.lstm_layers,
-                               batch_first=True, bidirectional=self.bidirectional, dropout=self.drop)
-        self.force_out = nn.LSTM(input_size=self.dynamics, hidden_size=self.force.shape[1], num_layers=self.lstm_layers,
-                                 batch_first=True, bidirectional=self.bidirectional, dropout=self.drop)
+        # self.pos_out = nn.LSTM(input_size=self.dynamics, hidden_size=self.pos.shape[1], num_layers=self.lstm_layers,
+        #                        batch_first=True, bidirectional=self.bidirectional, dropout=self.drop)
+        # self.vel_out = nn.LSTM(input_size=self.dynamics, hidden_size=self.vel.shape[1], num_layers=self.lstm_layers,
+        #                        batch_first=True, bidirectional=self.bidirectional, dropout=self.drop)
+        # self.acc_out = nn.LSTM(input_size=self.dynamics, hidden_size=self.acc.shape[1], num_layers=self.lstm_layers,
+        #                        batch_first=True, bidirectional=self.bidirectional, dropout=self.drop)
+        # self.force_out = nn.LSTM(input_size=self.dynamics, hidden_size=self.force.shape[1], num_layers=self.lstm_layers,
+        #                          batch_first=True, bidirectional=self.bidirectional, dropout=self.drop)
+
+        self.meta_out = TCN(self.dynamics, self.meta.shape[1])
+        self.pos_out = TCN(self.dynamics, self.pos.shape[1])
+        self.vel_out = TCN(self.dynamics, self.vel.shape[1])
+        self.acc_out = TCN(self.dynamics, self.acc.shape[1])
+        self.force_out = TCN(self.dynamics, self.force.shape[1])
 
         self.p_out = nn.Linear(self.pos.shape[1] * self.directions_num, self.pos.shape[1], bias=True)
         self.v_out = nn.Linear(self.vel.shape[1] * self.directions_num, self.vel.shape[1], bias=True)
@@ -191,8 +292,7 @@ class AvatarUNRES(nn.Module):
 
         return h0m, c0m, h0p, c0p, h0v, c0v, h0a, c0a, h0f, c0f
 
-    def forward(self, meta, pos, vel, acc, force, hc4lstm, b_st_flag=0):
-        h0m, c0m, h0p, c0p, h0v, c0v, h0a, c0a, h0f, c0f = hc4lstm
+    def forward(self, meta, pos, vel, acc, force, flag=0):
 
         m = meta.unsqueeze(1)
         p = pos.unsqueeze(1)
@@ -205,13 +305,22 @@ class AvatarUNRES(nn.Module):
         #     p = torch.swapaxes(m, 0, 1)
         #     v = torch.swapaxes(m, 0, 1)
         #     a = torch.swapaxes(m, 0, 1)
+
         #     f = torch.swapaxes(m, 0, 1)
 
-        m, (hnm, cnm) = self.LSTM_meta(m, (h0m, c0m))
-        p, (hnp, cnp) = self.LSTM_pos(p, (h0p, c0p))
-        v, (hnv, cnv) = self.LSTM_vel(v, (h0v, c0v))
-        a, (hna, cna) = self.LSTM_acc(a, (h0a, c0a))
-        f, (hnf, cnf) = self.LSTM_force(f, (h0f, c0f))
+        m = self.tcnm(m)
+        p = self.tcnp(p)
+        v = self.tcnv(v)
+        a = self.tcna(a)
+        f = self.tcnf(f)
+        # m, (hnm, cnm) = self.LSTM_meta(m, (h0m, c0m))
+        # p, (hnp, cnp) = self.LSTM_pos(p, (h0p, c0p))
+        # v, (hnv, cnv) = self.LSTM_vel(v, (h0v, c0v))
+        # a, (hna, cna) = self.LSTM_acc(a, (h0a, c0a))
+        # f, (hnf, cnf) = self.LSTM_force(f, (h0f, c0f))
+        # if flag == 1:
+        #     print(hnp)
+
         # print(p)
         m = torch.nn.functional.gelu(self.uplift_meta(m.squeeze(1)))
         p = torch.nn.functional.gelu(self.uplift_pos(p.squeeze(1)))
@@ -288,16 +397,17 @@ class AvatarUNRES(nn.Module):
 
         co = torch.nn.functional.gelu(self.common_output(h0))
         co = co.unsqueeze(1)
-        pred_pos, (hnp, cnp) = self.pos_out(co, (hnp, cnp))
-        pred_vel, (hnv, cnv) = self.vel_out(co, (hnv, cnv))
-        pred_acc, (hna, cna) = self.acc_out(co, (hna, cna))
-        pred_force, (hnf, cnf) = self.force_out(co, (hnf, cnf))
-        pred_pos, pred_vel, pred_acc, pred_force = pred_pos.squeeze(1), pred_vel.squeeze(1), pred_acc.squeeze(
-            1), pred_force.squeeze(1)
+
+        pred_p = self.pos_out(co)
+        pred_v = self.vel_out(co)
+        pred_a = self.acc_out(co)
+        pred_f = self.force_out(co)
+        pred_p, pred_v, pred_a, pred_f = pred_p.squeeze(1), pred_v.squeeze(1), pred_a.squeeze(
+            1), pred_f.squeeze(1)
         # print(hnp.shape,pred_pos.shape)
-        hc4lstm = hnm, cnm, hnp, cnp, hnv, cnv, hna, cna, hnf, cnf
-        pred_pos = self.p_out(pred_pos)
-        pred_vel = self.v_out(pred_vel)
-        pred_acc = self.a_out(pred_acc)
-        pred_force = self.f_out(pred_force)
-        return pred_pos, pred_vel, pred_acc, pred_force, hc4lstm
+
+        pred_pos = self.p_out(pred_p)
+        pred_vel = self.v_out(pred_v)
+        pred_acc = self.a_out(pred_a)
+        pred_force = self.f_out(pred_f)
+        return pred_pos, pred_vel, pred_acc, pred_force
