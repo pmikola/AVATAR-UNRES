@@ -394,7 +394,7 @@ for i in range(int(gtdlen)):
 
 ani = animation.ArtistAnimation(fig, ims, interval=100, blit=True, repeat=True)
 
-ani.save("proteinA-folding_tcn_v1.gif", dpi=300, writer=PillowWriter(fps=30))
+ani.save("proteinA-folding_tcn_v2.gif", dpi=400, writer=PillowWriter(fps=30))
 plt.show()
 
 model.cpu()
