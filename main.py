@@ -155,17 +155,17 @@ train_indices = indices[:train_sizev2]
 val_indices = indices[train_sizev2:]
 
 num_epochs = 1000
-batch_size = 25
+batch_size = 20
 bloss = []
 bbloss = []
 model = AvatarUNRES(meta, coords, velocities, accelerations, forces).to(device)
 criterion = nn.MSELoss(reduction='mean')
 
-# if os.path.exists(model_path):
-#     model.load_state_dict(torch.load(model_path))
+if os.path.exists(model_path):
+    model.load_state_dict(torch.load(model_path))
 # model = torch.load(model_path)
 
-optimizer = optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-5)
+optimizer = optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-4)
 loss_idx = 0
 for epoch in range(num_epochs):
     torch.set_grad_enabled(True)
@@ -261,7 +261,8 @@ model.eval()
 start = time.time()
 with torch.set_grad_enabled(False):
     for i in range(int(gtdlen)):
-        c, v, a, f, hc4lstm = model(meta_test[i].unsqueeze(0), c, v, a, f)
+        c, v, a, f = model(meta_test[i].unsqueeze(0), c, v, a, f)
+        print(c)
         pred_dynamics_pos.append(c.detach().cpu().numpy())
         pred_dynamics_vel.append(v.detach().cpu().numpy())
         pred_dynamics_acc.append(a.detach().cpu().numpy())
@@ -391,9 +392,9 @@ for i in range(int(gtdlen)):
 # update_anim()
 # mlab.show()
 
-ani = animation.ArtistAnimation(fig, ims, interval=50, blit=True, repeat=True)
+ani = animation.ArtistAnimation(fig, ims, interval=100, blit=True, repeat=True)
 
-# ani.save("proteinA-folding.gif", dpi=300, writer=PillowWriter(fps=30))
+ani.save("proteinA-folding_tcn_v1.gif", dpi=300, writer=PillowWriter(fps=30))
 plt.show()
 
 model.cpu()

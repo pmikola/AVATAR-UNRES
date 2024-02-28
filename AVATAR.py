@@ -17,7 +17,7 @@ torch.autograd.set_detect_anomaly(True)
 
 
 class TCN(nn.Module):
-    def __init__(self, features, output_size, layers=2, kernel_s=3, filters=2, dropout=0.1):
+    def __init__(self, features, output_size, layers=2, kernel_s=3, filters=2, dropout=0.2):
         super(TCN, self).__init__()
         self.output_size = output_size
         self.features = features
@@ -38,7 +38,7 @@ class TCN(nn.Module):
         self.bn2 = nn.BatchNorm1d(self.filters)
         self.dropout2 = nn.Dropout(self.dropout)
 
-        self.conv_1x1 = nn.Conv1d(1, self.filters, kernel_size=(kernel_s,), padding=(kernel_s - 1) // 2)
+        self.conv_1x1 = nn.Conv1d(1, self.filters, kernel_size=(1,), )
 
         self.convs = nn.ModuleList()
         self.bns = nn.ModuleList()
@@ -59,8 +59,7 @@ class TCN(nn.Module):
                           padding=(kernel_s - 1) * dilation_factor // 2))
             self.bns2.append(nn.BatchNorm1d(self.filters))
             self.convs_1x1.append(
-                nn.Conv1d(self.filters, self.filters, kernel_size=(kernel_s,), dilation=dilation_factor * 2,
-                          padding=(kernel_s - 1) * dilation_factor))
+                nn.Conv1d(self.filters, self.filters, kernel_size=(1,)))
 
         self.out = nn.Linear(self.features, self.output_size)
 
@@ -173,18 +172,17 @@ class AvatarUNRES(nn.Module):
         # self.LSTM_force = nn.LSTM(input_size=self.force.shape[1], hidden_size=self.force.shape[1],
         #                           num_layers=self.lstm_layers,
         #                           batch_first=True, bidirectional=self.bidirectional, dropout=self.drop)
+        self.tcnm = TCN(self.meta.shape[1], self.meta.shape[1])
+        self.tcnp = TCN(self.pos.shape[1], self.pos.shape[1])
+        self.tcnv = TCN(self.vel.shape[1], self.vel.shape[1])
+        self.tcna = TCN(self.acc.shape[1], self.acc.shape[1])
+        self.tcnf = TCN(self.force.shape[1], self.force.shape[1])
 
         self.uplift_meta = nn.Linear(self.meta.shape[1] * self.directions_num, self.uplift_dim, bias=True)
         self.uplift_pos = nn.Linear(self.pos.shape[1] * self.directions_num, self.uplift_dim, bias=True)
         self.uplift_vel = nn.Linear(self.vel.shape[1] * self.directions_num, self.uplift_dim, bias=True)
         self.uplift_acc = nn.Linear(self.acc.shape[1] * self.directions_num, self.uplift_dim, bias=True)
         self.uplift_force = nn.Linear(self.force.shape[1] * self.directions_num, self.uplift_dim, bias=True)
-
-        self.tcnm = TCN(self.meta.shape[1], self.meta.shape[1])
-        self.tcnp = TCN(self.pos.shape[1], self.pos.shape[1])
-        self.tcnv = TCN(self.vel.shape[1], self.vel.shape[1])
-        self.tcna = TCN(self.acc.shape[1], self.acc.shape[1])
-        self.tcnf = TCN(self.force.shape[1], self.force.shape[1])
 
         self.spectralConvp0 = SpectralConv1d(self.uplift_dim, self.uplift_dim, self.modes)
         self.wp0 = nn.Linear(self.uplift_dim, self.uplift_dim)
