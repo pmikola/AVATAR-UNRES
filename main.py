@@ -174,8 +174,8 @@ for epoch in range(num_epochs):
     torch.set_grad_enabled(True)
     model.train()
     model.batch_size = batch_size
-    for param_group in optimizer.param_groups:
-        param_group['lr'] = lr
+    # for param_group in optimizer.param_groups:
+    #     param_group['lr'] = lr
 
     # RANDOM POINTS DYNAMIC LEARNING WITH STEP SIZE 1
     # t = random.sample(range(0, meta.shape[0] - 1), batch_size)
@@ -197,8 +197,8 @@ for epoch in range(num_epochs):
     # seq_len = random.randint(4, 50)
     seq_len = 20
     model.batch_size = 1
-    for param_group in optimizer.param_groups:
-        param_group['lr'] = lr * lr_mod
+    # for param_group in optimizer.param_groups:
+    #     param_group['lr'] = lr * lr_mod
     k = random.randint(0, coords.shape[0] - seq_len - 1)
     seq_step_0 = range(k, k + seq_len)
     seq_step_1 = range(k + 1, k + seq_len + 1)
@@ -249,7 +249,7 @@ for epoch in range(num_epochs):
             loss_val = criterion(preds_test, target_test)
             bloss.append(loss.item())
             bbloss.append(loss_val.item())
-            if epoch > 100 and loss_val < max(bbloss) and loss < max(bloss):
+            if epoch > 20 and loss_val < max(bbloss) and loss < max(bloss):
                 torch.save(model.state_dict(), model_path)
                 # batch_size += 1
                 # if batch_size > 100:
