@@ -229,7 +229,7 @@ class AvatarUNRES(nn.Module):
 
         self.astrA0 = nn.Linear(self.uplift_dim, self.uplift_dim, bias=True)
         self.astrB0 = nn.Linear(self.uplift_dim, self.drop_dim, bias=True)
-        self.h0 = nn.Linear(self.uplift_dim * 5, self.drop_dim, bias=True)
+        self.h0 = nn.Linear(self.uplift_dim * 4, self.drop_dim, bias=True)
         # self.d0 = dynamicAct()
 
         # self.ARU1Uplif = nn.Linear(self.drop_dim, self.drop_dim, bias=True)

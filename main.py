@@ -14,6 +14,7 @@ from matplotlib import pyplot as plt, animation
 from matplotlib.animation import PillowWriter
 from torch import nn, optim
 from AVATAR import AvatarUNRES
+from utils import switch_order
 
 random.seed(2024)
 np.random.seed(2024)
@@ -120,13 +121,16 @@ for i in range(len(meta_info[:])):
         m2.append(m1)
     meta_info[i] = m2
 
+pos = switch_order(pos)
+vel = switch_order(vel)
+acc = switch_order(acc)
+force = switch_order(force)
+
 meta = torch.tensor(meta_info, device=device).reshape(1000, 9 * 32)
 coords = torch.tensor(pos, device=device)
 velocities = torch.tensor(vel, device=device)
 accelerations = torch.tensor(acc, device=device)
 forces = torch.tensor(force, device=device)
-
-train_size = int(0.9 * meta.shape[0])
 
 outmap_min, _ = torch.min(coords, dim=1, keepdim=True)
 outmap_max, _ = torch.max(coords, dim=1, keepdim=True)
@@ -140,6 +144,8 @@ accelerations = (accelerations - outmap_min) / (outmap_max - outmap_min)
 outmap_min, _ = torch.min(forces, dim=1, keepdim=True)
 outmap_max, _ = torch.max(forces, dim=1, keepdim=True)
 forces = (forces - outmap_min) / (outmap_max - outmap_min)
+
+train_size = int(0.9 * meta.shape[0])
 
 meta, meta_test = meta[:train_size], meta[train_size:]
 coords, coords_test = coords[:train_size], coords[train_size:]
@@ -377,26 +383,17 @@ ims = []
 # def update_anim():
 ############# MLAB
 for i in range(int(gtdlen)):
-    xx = 0
-    yy = 14
-    zz = 29
+    k = 0
     x, y, z, xp, yp, zp = [], [], [], [], [], []
     for j in range(0, int(pred_dynamics_pos.shape[1] / 3)):
         # print(pred_dynamics_pos.shape)
-        x.append(ground_truth_dynamics_pos[i, xx])
-        y.append(ground_truth_dynamics_pos[i, yy])
-        z.append(ground_truth_dynamics_pos[i, zz])
-        xp.append(pred_dynamics_pos[i, xx])
-        yp.append(pred_dynamics_pos[i, yy])
-        zp.append(pred_dynamics_pos[i, zz])
-
-        xx += 1
-        yy += 1
-        zz += 1
-        if zz % 15 == 0:
-            xx += 15
-            yy += 15
-            zz += 15
+        x.append(ground_truth_dynamics_pos[i, k])
+        y.append(ground_truth_dynamics_pos[i, k + 1])
+        z.append(ground_truth_dynamics_pos[i, k + 2])
+        xp.append(pred_dynamics_pos[i, k])
+        yp.append(pred_dynamics_pos[i, k + 1])
+        zp.append(pred_dynamics_pos[i, k + 2])
+        k += 3
 
     folding = prota.scatter(x, y, z, linewidth=linewidth, antialiased=False, s=marker_size, c="blue")
     folding_pred = prota.scatter(xp, yp, zp, linewidth=linewidth, antialiased=False, s=marker_size, c="red")
