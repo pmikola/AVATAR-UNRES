@@ -154,23 +154,29 @@ val_size = meta.shape[0] - train_sizev2
 train_indices = indices[:train_sizev2]
 val_indices = indices[train_sizev2:]
 
-num_epochs = 1000
-batch_size = 20
+num_epochs = 200
+batch_size = 10
 bloss = []
 bbloss = []
 model = AvatarUNRES(meta, coords, velocities, accelerations, forces).to(device)
-criterion = nn.MSELoss(reduction='mean')
-
-if os.path.exists(model_path):
-    model.load_state_dict(torch.load(model_path))
+# criterion = nn.MSELoss(reduction='mean')
+criterion = nn.HuberLoss(reduction='mean', delta=1.0)
+lr = 1e-4
+lr_mod = 1
+# if os.path.exists(model_path):
+#     model.load_state_dict(torch.load(model_path))
 # model = torch.load(model_path)
 
-optimizer = optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-4)
+optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=1e-3)
+# optimizer = torch.optim.RMSprop(model.parameters(), lr=1e-4, weight_decay=1e-4)
 loss_idx = 0
 for epoch in range(num_epochs):
     torch.set_grad_enabled(True)
     model.train()
     model.batch_size = batch_size
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr
+
     # RANDOM POINTS DYNAMIC LEARNING WITH STEP SIZE 1
     # t = random.sample(range(0, meta.shape[0] - 1), batch_size)
     t = torch.randperm(train_indices.numel())[:batch_size]
@@ -190,24 +196,26 @@ for epoch in range(num_epochs):
 
     # seq_len = random.randint(4, 50)
     seq_len = 20
-    k = random.randint(0, coords.shape[0] - seq_len - 1)
-    seq_step_0 = k  # range(k, k + seq_len)
-    seq_step_1 = k + 1  # range(k + 1, k + seq_len + 1)
-    c, v, a, f = coords[seq_step_0].unsqueeze(0), velocities[seq_step_0].unsqueeze(0), accelerations[seq_step_0].unsqueeze(0), forces[seq_step_0].unsqueeze(0)
     model.batch_size = 1
-    for i in range(k, k + seq_len):
-        seq_step_0 = i
-        seq_step_1 = i + 1
-        c_seq, v_seq, a_seq, f_seq = model(meta[seq_step_0].unsqueeze(0), c, v, a, f)
-        preds_train_seq = torch.cat([c_seq, v_seq, a_seq, f_seq], dim=1)
-        target_train_seq = torch.cat(
-            [coords[seq_step_1].unsqueeze(0), velocities[seq_step_1].unsqueeze(0), accelerations[seq_step_1].unsqueeze(0),
-             forces[seq_step_1].unsqueeze(0)], dim=1)
-        loss_seq = loss_seq + criterion(preds_train_seq, target_train_seq)
-        loss_coords_seq = loss_coords_seq + criterion(c_seq, coords[seq_step_1].unsqueeze(0))
-        loss_velocities_seq = loss_velocities_seq + criterion(v_seq, velocities[seq_step_1].unsqueeze(0))
-        loss_accelerations_seq = loss_accelerations_seq + criterion(a_seq, accelerations[seq_step_1].unsqueeze(0))
-        loss_forces_seq = loss_forces_seq + criterion(f_seq, forces[seq_step_1].unsqueeze(0))
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr * lr_mod
+    k = random.randint(0, coords.shape[0] - seq_len - 1)
+    seq_step_0 = range(k, k + seq_len)
+    seq_step_1 = range(k + 1, k + seq_len + 1)
+    c, v, a, f = coords[seq_step_0], velocities[seq_step_0], accelerations[seq_step_0], forces[seq_step_0]
+    # for i in range(k, k + seq_len):
+    # seq_step_0 = i
+    # seq_step_1 = i + 1
+    c_seq, v_seq, a_seq, f_seq = model(meta[seq_step_0], c, v, a, f, 1)
+    preds_train_seq = torch.cat([c_seq, v_seq, a_seq, f_seq], dim=1)
+    target_train_seq = torch.cat(
+        [coords[seq_step_1], velocities[seq_step_1], accelerations[seq_step_1],
+         forces[seq_step_1]], dim=1)
+    loss_seq = loss_seq + criterion(preds_train_seq, target_train_seq)
+    loss_coords_seq = loss_coords_seq + criterion(c_seq, coords[seq_step_1])
+    loss_velocities_seq = loss_velocities_seq + criterion(v_seq, velocities[seq_step_1])
+    loss_accelerations_seq = loss_accelerations_seq + criterion(a_seq, accelerations[seq_step_1])
+    loss_forces_seq = loss_forces_seq + criterion(f_seq, forces[seq_step_1])
     # SEQUENTIAL LEARNING WITH BATCH SIZE 1
 
     loss_c = criterion(c_train, coords[t_1]) + loss_coords_seq
@@ -218,27 +226,29 @@ for epoch in range(num_epochs):
 
     loss_idx = random.randint(0, 3)
     loss = loss_seq + criterion(preds_train, target_train) + sum(separate_losess)
-    bloss.append(loss.item())
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
 
     # Print progress
-    if (epoch) % 25 == 0:
+    if (epoch) % 10 == 0:
         with torch.set_grad_enabled(False):
             model.eval()
             tval = val_indices
             # tval = random.sample(range(0, meta.shape[0] - 1), batch_size)
             tval_1 = [s.item() + 1 for s in tval]
             model.batch_size = coords[tval].shape[0]
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = lr
 
             c_test, v_test, a_test, f_test = model(meta[tval], coords[tval], velocities[tval],
-                                                      accelerations[tval],
-                                                      forces[tval])
+                                                   accelerations[tval],
+                                                   forces[tval])
             preds_test = torch.cat([c_test, v_test, a_test, f_test], dim=1)
             target_test = torch.cat([coords[tval_1], velocities[tval_1], accelerations[tval_1], forces[tval_1]], dim=1)
             loss_val = criterion(preds_test, target_test)
-            bbloss.append(loss_val)
+            bloss.append(loss.item())
+            bbloss.append(loss_val.item())
             if epoch > 100 and loss_val < max(bbloss) and loss < max(bloss):
                 torch.save(model.state_dict(), model_path)
                 # batch_size += 1
@@ -249,6 +259,13 @@ for epoch in range(num_epochs):
 c, v, a, f = torch.unsqueeze(coords_test[0], dim=0), torch.unsqueeze(velocities_test[0], dim=0), torch.unsqueeze(
     accelerations_test[0], dim=0), torch.unsqueeze(forces_test[0], dim=0)
 
+fig = plt.figure()
+# plt.style.use('dark_background')
+plt.plot(bloss, c='blue')
+plt.plot(bbloss, c='orange')
+plt.grid()
+plt.show()
+
 pred_dynamics_pos = []
 pred_dynamics_vel = []
 pred_dynamics_acc = []
@@ -256,7 +273,8 @@ pred_dynamics_force = []
 
 gtdlen = meta_test.shape[0] * 1
 model.batch_size = 1
-
+for param_group in optimizer.param_groups:
+    param_group['lr'] = lr * lr_mod
 model.eval()
 start = time.time()
 with torch.set_grad_enabled(False):
@@ -341,7 +359,7 @@ prota = fig.add_subplot(111, projection='3d')
 prota.set_xlabel("x")
 prota.set_ylabel("y")
 prota.set_zlabel("z")
-marker_size = 1
+marker_size = 1.5
 linewidth = 1
 ims = []
 
@@ -394,7 +412,7 @@ for i in range(int(gtdlen)):
 
 ani = animation.ArtistAnimation(fig, ims, interval=100, blit=True, repeat=True)
 
-ani.save("proteinA-folding_tcn_v2.gif", dpi=400, writer=PillowWriter(fps=30))
+ani.save("proteinA-folding_tcn_v6_.gif", dpi=600, writer=PillowWriter(fps=20))
 plt.show()
 
 model.cpu()
