@@ -148,10 +148,54 @@ forces = (forces - outmap_min) / (outmap_max - outmap_min)
 train_size = int(0.9 * meta.shape[0])
 
 meta, meta_test = meta[:train_size], meta[train_size:]
-coords, coords_test = coords[:train_size], coords[train_size:]
-velocities, velocities_test = velocities[:train_size], velocities[train_size:]
-accelerations, accelerations_test = accelerations[:train_size], accelerations[train_size:]
-forces, forces_test = forces[:train_size], forces[train_size:]
+
+grid_step = 0.01
+grid_padding = 2
+center_id = [1.]
+center_id_length = len(center_id)
+num_of_space_parameters = 9 + center_id_length
+
+coords_spaceXtime = torch.zeros(
+    (coords.shape[0], grid_padding + int(1. / grid_step), grid_padding + int(1. / grid_step),
+     grid_padding + int(1. / grid_step)), device=device)
+velocities_spaceXtime = torch.zeros(
+    (velocities.shape[0], grid_padding + int(1. / grid_step), grid_padding + int(1. / grid_step),
+     grid_padding + int(1. / grid_step)), device=device)
+accelerations_spaceXtime = torch.zeros(
+    (accelerations.shape[0], grid_padding + int(1. / grid_step), grid_padding + int(1. / grid_step),
+     grid_padding + int(1. / grid_step)), device=device)
+forces_spaceXtime = torch.zeros(
+    (forces.shape[0], grid_padding + int(1. / grid_step), grid_padding + int(1. / grid_step),
+     grid_padding + int(1. / grid_step)), device=device)
+
+# print(sys.getsizeof(coords_spaceXtime),sys.getsizeof(velocities_spaceXtime),sys.getsizeof(accelerations_spaceXtime),sys.getsizeof(forces_spaceXtime))
+
+for i in range(coords.shape[0] - 1):
+    coords_slice = coords[i].reshape(-1, 3)
+    velocities_slice = velocities[i].reshape(-1, 3)
+    accelerations_slice = accelerations[i].reshape(-1, 3)
+    forces_slice = forces[i].reshape(-1, 3)
+
+    coords_idx = (coords_slice / grid_step).type(torch.long)
+    velocities_idx = (velocities_slice / grid_step).type(torch.long)
+    accelerations_idx = (accelerations_slice / grid_step).type(torch.long)
+    forces_idx = (forces_slice / grid_step).type(torch.long)
+
+    coords_spaceXtime[i, coords_idx[:, 0], coords_idx[:, 1], coords_idx[:, 2]] = 1.
+    velocities_spaceXtime[i, velocities_idx[:, 0], velocities_idx[:, 1], velocities_idx[:, 2]] = 1.
+    accelerations_spaceXtime[i, accelerations_idx[:, 0], accelerations_idx[:, 1], accelerations_idx[:, 2]] = 1.
+    forces_spaceXtime[i, forces_idx[:, 0], forces_idx[:, 1], forces_idx[:, 2]] = 1.
+
+# print(coords_spaceXtime.shape, velocities_spaceXtime.shape, accelerations_spaceXtime.shape, forces_spaceXtime.shape)
+coords_spaceXtime,coords_spaceXtime_test = coords_spaceXtime[:train_size],coords_spaceXtime[train_size:]
+velocities_spaceXtime,velocities_spaceXtime_test = velocities_spaceXtime[:train_size],velocities_spaceXtime[train_size:]
+accelerations_spaceXtime,accelerations_spaceXtime_test = accelerations_spaceXtime[:train_size],accelerations_spaceXtime[train_size:]
+forces_spaceXtime,forces_spaceXtime_test = forces_spaceXtime[:train_size],forces_spaceXtime[train_size:]
+
+# coords, coords_test = coords[:train_size], coords[train_size:]
+# velocities, velocities_test = velocities[:train_size], velocities[train_size:]
+# accelerations, accelerations_test = accelerations[:train_size], accelerations[train_size:]
+# forces, forces_test = forces[:train_size], forces[train_size:]
 
 # Training loop
 indices = torch.randperm(meta.shape[0] - 1)
@@ -161,10 +205,10 @@ train_indices = indices[:train_sizev2]
 val_indices = indices[train_sizev2:]
 
 num_epochs = 200
-batch_size = 10
+batch_size = 5
 bloss = []
 bbloss = []
-model = AvatarUNRES(meta, coords, velocities, accelerations, forces).to(device)
+model = AvatarUNRES(meta, coords_spaceXtime, velocities_spaceXtime, accelerations_spaceXtime, forces_spaceXtime).to(device)
 # criterion = nn.MSELoss(reduction='mean')
 criterion = nn.HuberLoss(reduction='mean', delta=1.0)
 lr = 1e-4
@@ -187,9 +231,10 @@ for epoch in range(num_epochs):
     # t = random.sample(range(0, meta.shape[0] - 1), batch_size)
     t = torch.randperm(train_indices.numel())[:batch_size]
     t_1 = [s.item() + 1 for s in t]
-    c_train, v_train, a_train, f_train = model(meta[t], coords[t], velocities[t], accelerations[t], forces[t])
+    c_train, v_train, a_train, f_train = model(meta[t], coords_spaceXtime[t], velocities_spaceXtime[t],
+                                               accelerations_spaceXtime[t], forces_spaceXtime[t])
     preds_train = torch.cat([c_train, v_train, a_train, f_train], dim=1)
-    target_train = torch.cat([coords[t_1], velocities[t_1], accelerations[t_1], forces[t_1]], dim=1)
+    target_train = torch.cat([coords_spaceXtime[t_1], velocities_spaceXtime[t_1], accelerations_spaceXtime[t_1], forces_spaceXtime[t_1]], dim=1)
     # RANDOM POINTS DYNAMIC LEARNING WITH STEP SIZE 1
 
     # if (epoch) % 50 == 0:
@@ -201,33 +246,33 @@ for epoch in range(num_epochs):
     loss_forces_seq = torch.tensor([0.], requires_grad=True, device=device)
 
     # seq_len = random.randint(4, 50)
-    seq_len = 20
+    seq_len = 5
     model.batch_size = 1
     # for param_group in optimizer.param_groups:
     #     param_group['lr'] = lr * lr_mod
-    k = random.randint(0, coords.shape[0] - seq_len - 1)
+    k = random.randint(0, coords_spaceXtime.shape[0] - seq_len - 1)
     seq_step_0 = range(k, k + seq_len)
     seq_step_1 = range(k + 1, k + seq_len + 1)
-    c, v, a, f = coords[seq_step_0], velocities[seq_step_0], accelerations[seq_step_0], forces[seq_step_0]
+    c, v, a, f = coords_spaceXtime[seq_step_0], velocities_spaceXtime[seq_step_0], accelerations_spaceXtime[seq_step_0], forces_spaceXtime[seq_step_0]
     # for i in range(k, k + seq_len):
     # seq_step_0 = i
     # seq_step_1 = i + 1
     c_seq, v_seq, a_seq, f_seq = model(meta[seq_step_0], c, v, a, f, 1)
     preds_train_seq = torch.cat([c_seq, v_seq, a_seq, f_seq], dim=1)
     target_train_seq = torch.cat(
-        [coords[seq_step_1], velocities[seq_step_1], accelerations[seq_step_1],
-         forces[seq_step_1]], dim=1)
+        [coords_spaceXtime[seq_step_1], velocities_spaceXtime[seq_step_1], accelerations_spaceXtime[seq_step_1],
+         forces_spaceXtime[seq_step_1]], dim=1)
     loss_seq = loss_seq + criterion(preds_train_seq, target_train_seq)
-    loss_coords_seq = loss_coords_seq + criterion(c_seq, coords[seq_step_1])
-    loss_velocities_seq = loss_velocities_seq + criterion(v_seq, velocities[seq_step_1])
-    loss_accelerations_seq = loss_accelerations_seq + criterion(a_seq, accelerations[seq_step_1])
-    loss_forces_seq = loss_forces_seq + criterion(f_seq, forces[seq_step_1])
+    loss_coords_seq = loss_coords_seq + criterion(c_seq, coords_spaceXtime[seq_step_1])
+    loss_velocities_seq = loss_velocities_seq + criterion(v_seq, velocities_spaceXtime[seq_step_1])
+    loss_accelerations_seq = loss_accelerations_seq + criterion(a_seq, accelerations_spaceXtime[seq_step_1])
+    loss_forces_seq = loss_forces_seq + criterion(f_seq, forces_spaceXtime[seq_step_1])
     # SEQUENTIAL LEARNING WITH BATCH SIZE 1
 
-    loss_c = criterion(c_train, coords[t_1]) + loss_coords_seq
-    loss_v = criterion(v_train, velocities[t_1]) + loss_velocities_seq
-    loss_a = criterion(a_train, accelerations[t_1]) + loss_accelerations_seq
-    loss_f = criterion(f_train, forces[t_1]) + loss_forces_seq
+    loss_c = criterion(c_train, coords_spaceXtime[t_1]) + loss_coords_seq
+    loss_v = criterion(v_train, velocities_spaceXtime[t_1]) + loss_velocities_seq
+    loss_a = criterion(a_train, accelerations_spaceXtime[t_1]) + loss_accelerations_seq
+    loss_f = criterion(f_train, forces_spaceXtime[t_1]) + loss_forces_seq
     separate_losess = [loss_c, loss_v, loss_a, loss_f]
 
     loss_idx = random.randint(0, 3)
@@ -243,15 +288,15 @@ for epoch in range(num_epochs):
             tval = val_indices
             # tval = random.sample(range(0, meta.shape[0] - 1), batch_size)
             tval_1 = [s.item() + 1 for s in tval]
-            model.batch_size = coords[tval].shape[0]
+            model.batch_size = coords_spaceXtime[tval].shape[0]
             for param_group in optimizer.param_groups:
                 param_group['lr'] = lr
 
-            c_test, v_test, a_test, f_test = model(meta[tval], coords[tval], velocities[tval],
-                                                   accelerations[tval],
-                                                   forces[tval])
+            c_test, v_test, a_test, f_test = model(meta[tval], coords_spaceXtime[tval], velocities_spaceXtime[tval],
+                                                   accelerations_spaceXtime[tval],
+                                                   forces_spaceXtime[tval])
             preds_test = torch.cat([c_test, v_test, a_test, f_test], dim=1)
-            target_test = torch.cat([coords[tval_1], velocities[tval_1], accelerations[tval_1], forces[tval_1]], dim=1)
+            target_test = torch.cat([coords_spaceXtime[tval_1], velocities_spaceXtime[tval_1], accelerations_spaceXtime[tval_1], forces_spaceXtime[tval_1]], dim=1)
             loss_val = criterion(preds_test, target_test)
             bloss.append(loss.item())
             bbloss.append(loss_val.item())
@@ -262,8 +307,8 @@ for epoch in range(num_epochs):
                 #     batch_size -= 1
             print(f'Epoch [{epoch + 1}/{num_epochs}],Train Loss: {loss.item():.5f}, Validation Loss: {loss_val:.5f}')
 
-c, v, a, f = torch.unsqueeze(coords_test[0], dim=0), torch.unsqueeze(velocities_test[0], dim=0), torch.unsqueeze(
-    accelerations_test[0], dim=0), torch.unsqueeze(forces_test[0], dim=0)
+c, v, a, f = torch.unsqueeze(coords_spaceXtime_test[0], dim=0), torch.unsqueeze(velocities_spaceXtime_test[0], dim=0), torch.unsqueeze(
+    accelerations_spaceXtime_test[0], dim=0), torch.unsqueeze(forces_spaceXtime_test[0], dim=0)
 
 fig = plt.figure()
 # plt.style.use('dark_background')
@@ -306,58 +351,15 @@ ground_truth_dynamics_acc = []
 ground_truth_dynamics_force = []
 
 for i in range(int(gtdlen)):
-    ground_truth_dynamics_pos.append(coords_test[i].cpu())
-    ground_truth_dynamics_vel.append(velocities_test[i].cpu())
-    ground_truth_dynamics_acc.append(accelerations_test[i].cpu())
-    ground_truth_dynamics_force.append(forces_test[i].cpu())
+    ground_truth_dynamics_pos.append(coords_spaceXtime_test[i].cpu())
+    ground_truth_dynamics_vel.append(velocities_spaceXtime_test[i].cpu())
+    ground_truth_dynamics_acc.append(accelerations_spaceXtime_test[i].cpu())
+    ground_truth_dynamics_force.append(forces_spaceXtime_test[i].cpu())
 
 ground_truth_dynamics_pos = np.array(ground_truth_dynamics_pos)
 ground_truth_dynamics_vel = np.array(ground_truth_dynamics_vel)
 ground_truth_dynamics_acc = np.array(ground_truth_dynamics_acc)
 ground_truth_dynamics_force = np.array(ground_truth_dynamics_force)
-
-x = range(np.array(ground_truth_dynamics_pos).shape[1])
-y = range(int(gtdlen))
-# fig = plt.figure(figsize=(8, 6))
-# plt.style.use('dark_background')
-# hp = fig.add_subplot(111, projection='3d')
-# hv = fig.add_subplot(222, projection='3d')
-# ha = fig.add_subplot(223, projection='3d')
-# hf = fig.add_subplot(224, projection='3d')
-X, Y = np.meshgrid(x, y)
-marker = '.'
-marker_size = 0.1
-linewidth = 0.1
-
-# hp.scatter(X, Y, pred_dynamics_pos, linewidth=linewidth, antialiased=False, s=marker_size, c="orange")
-# hv.scatter(X, Y, pred_dynamics_vel, linewidth=linewidth, antialiased=False, s=marker_size, c="orange")
-# ha.scatter(X, Y, pred_dynamics_acc, linewidth=linewidth, antialiased=False, s=marker_size, c="orange")
-# hf.scatter(X, Y, pred_dynamics_force, linewidth=linewidth, antialiased=False, s=marker_size, c="orange")
-
-# hp.scatter(X, Y, ground_truth_dynamics_pos, linewidth=linewidth, antialiased=False, s=marker_size, c="blue")
-# hv.scatter(X, Y, ground_truth_dynamics_vel, linewidth=linewidth, antialiased=False, s=marker_size, c="blue")
-# ha.scatter(X, Y, ground_truth_dynamics_acc, linewidth=linewidth, antialiased=False, s=marker_size, c="blue")
-# hf.scatter(X, Y, ground_truth_dynamics_force, linewidth=linewidth, antialiased=False, s=marker_size, c="blue")
-
-# hp.set_xlabel("Coordinates xyz")
-# hp.set_ylabel("Time step")
-# hp.set_zlabel("Coordinates values")
-
-
-# plt.tight_layout(pad=-5.0, w_pad=-5.0, h_pad=-5.0)
-# hp.grid(False)
-# hp.axis('off')
-# hv.grid(False)
-# hv.axis('off')
-# ha.grid(False)
-# ha.axis('off')
-# hf.grid(False)
-# hf.axis('off')
-
-# plt.show()
-
-# time.sleep(1000)
-# animate protein coordinates
 
 fig = plt.figure()
 plt.style.use('dark_background')
@@ -382,6 +384,7 @@ ims = []
 # @mlab.animate()
 # def update_anim():
 ############# MLAB
+
 for i in range(int(gtdlen)):
     k = 0
     x, y, z, xp, yp, zp = [], [], [], [], [], []
@@ -409,7 +412,7 @@ for i in range(int(gtdlen)):
 
 ani = animation.ArtistAnimation(fig, ims, interval=100, blit=True, repeat=True)
 
-ani.save("proteinA-folding_tcn_v6_.gif", dpi=600, writer=PillowWriter(fps=20))
+# ani.save("proteinA-folding_3d_v1_.gif", dpi=600, writer=PillowWriter(fps=20))
 plt.show()
 
 model.cpu()

@@ -1,4 +1,4 @@
-
+from torch.nn.functional import relu
 
 def switch_order(input):
     x_g = []
@@ -35,3 +35,6 @@ def switch_order(input):
             k += 3
 
     return input
+
+def real_imaginary_relu(z):
+    return relu(z.real) + 1.j * relu(z.imag)
