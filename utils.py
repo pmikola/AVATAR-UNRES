@@ -197,7 +197,7 @@ def project_2d_to_3d(view2d, dist_coef, rot_ang, dist, camera_params, rotation_s
         d3_coords_list = []
         for _ in range(pixels.shape[0]):  # Loop through all pixels
             s = 1.
-            u, v = pixels[i].squeeze()  # Extract pixel coordinates
+            u, v = pixels[i].squeeze()
             A_inv = np.linalg.inv(camera_matrix)
             rot_ang_x_deg = angle[0]
             rot_ang_y_deg = angle[1]
@@ -212,8 +212,7 @@ def project_2d_to_3d(view2d, dist_coef, rot_ang, dist, camera_params, rotation_s
             Rz = np.array([[np.cos(np.deg2rad(rot_ang_z_deg)), -np.sin(np.deg2rad(rot_ang_z_deg)), 0],
                            [np.sin(np.deg2rad(rot_ang_z_deg)), np.cos(np.deg2rad(rot_ang_z_deg)), 0],
                            [0, 0, 1]])
-            R = Rz @ Ry @ Rx
-            R_inv = np.linalg.inv(R)
+            R_inv = Rz @ Ry @ Rx
             uv_coords = np.array([[u], [v], [1.]]).T
             dim2Todim3 = s * uv_coords @ A_inv
             d3_coords = (dim2Todim3 - tvec_torch.numpy()) @ R_inv
