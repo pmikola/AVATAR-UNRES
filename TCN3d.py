@@ -3,7 +3,7 @@ import torch.nn.functional as F
 
 
 class TCN3d(nn.Module):
-    def __init__(self, features, output_size, layers=2, kernel_s=3, filters=100, dropout=0.2):
+    def __init__(self, features, output_size, layers=1, kernel_s=3, filters=100, dropout=0.2):
         super(TCN3d, self).__init__()
         self.output_size = output_size
         self.features = features
