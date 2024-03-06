@@ -156,12 +156,12 @@ def project_2d_to_3d(view2d, dist_coef, rot_ang, dist, camera_params, rotation_s
                                   [0, 0, 1]], dtype=torch.float32)
 
     rotation_angles = np.array([(0, 0, 0),
-                                (np.deg2rad(rot_ang[0]), 0, 0),
-                                (0, np.deg2rad(rot_ang[1]), 0),
-                                (0, 0, np.deg2rad(rot_ang[2])),
-                                (np.deg2rad(rot_ang[3]), np.deg2rad(rot_ang[4]), np.deg2rad(rot_ang[5])),
-                                (np.deg2rad(rot_ang[6]), np.deg2rad(rot_ang[7]), np.deg2rad(rot_ang[8])),
-                                (np.deg2rad(rot_ang[9]), np.deg2rad(rot_ang[10]), np.deg2rad(rot_ang[11])),
+                                (rot_ang[0], 0, 0),
+                                (0, rot_ang[1], 0),
+                                (0, 0, rot_ang[2]),
+                                (rot_ang[3], rot_ang[4], rot_ang[5]),
+                                (rot_ang[6], rot_ang[7], rot_ang[8]),
+                                (rot_ang[9], rot_ang[10], rot_ang[11]),
                                 (np.pi, np.pi, np.pi)])
 
     trans_x = dist[0]
@@ -183,44 +183,42 @@ def project_2d_to_3d(view2d, dist_coef, rot_ang, dist, camera_params, rotation_s
 
         # plt.imshow(view2d[0][i].cpu())
         # plt.show()
-        treshold = 0.5
-        pixels = []
-        for y in range(height):
-            for x in range(width):
-                # Check if the pixel value is non-zero (red)
-                if view2d[0][i][y, x] != 0:  # > treshold
-                    pixels.append([[x, y]])  # Append the coordinates to the list in the required format
-        pixels = np.array(pixels, dtype=np.float32)
+        k = 92
+        view2d_tensor = torch.tensor(view2d[0][i].cpu())
+        topk_values, topk_indices = torch.topk(view2d_tensor.view(-1), k)
+        y_indices = topk_indices // width
+        x_indices = topk_indices % width
+        pixels = torch.stack((x_indices, y_indices), dim=1).float()
 
         # undistorted normalized points
         # xy_undistorted = cv2.undistortPoints(pixels, camera_matrix.numpy(), dist_coef.numpy())
-        d3_coords_list = []
-        for _ in range(pixels.shape[0]):  # Loop through all pixels
+        d3_coords_arr = torch.empty((1, 3))
+        for _ in range(pixels.shape[0]):
             s = 1.
             u, v = pixels[i].squeeze()
-            A_inv = np.linalg.inv(camera_matrix)
-            rot_ang_x_deg = angle[0]
-            rot_ang_y_deg = angle[1]
-            rot_ang_z_deg = angle[2]
+            A_inv = torch.inverse(camera_matrix)
+            rot_ang_x_deg = rvec_torch[0]
+            rot_ang_y_deg = rvec_torch[1]
+            rot_ang_z_deg = rvec_torch[2]
 
-            Rx = np.array([[1, 0, 0],
-                           [0, np.cos(np.deg2rad(rot_ang_x_deg)), -np.sin(np.deg2rad(rot_ang_x_deg))],
-                           [0, np.sin(np.deg2rad(rot_ang_x_deg)), np.cos(np.deg2rad(rot_ang_x_deg))]])
-            Ry = np.array([[np.cos(np.deg2rad(rot_ang_y_deg)), 0, np.sin(np.deg2rad(rot_ang_y_deg))],
-                           [0, 1, 0],
-                           [-np.sin(np.deg2rad(rot_ang_y_deg)), 0, np.cos(np.deg2rad(rot_ang_y_deg))]])
-            Rz = np.array([[np.cos(np.deg2rad(rot_ang_z_deg)), -np.sin(np.deg2rad(rot_ang_z_deg)), 0],
-                           [np.sin(np.deg2rad(rot_ang_z_deg)), np.cos(np.deg2rad(rot_ang_z_deg)), 0],
-                           [0, 0, 1]])
+            Rx = torch.tensor([[1, 0, 0],
+                               [0, torch.cos(torch.deg2rad(rot_ang_x_deg)), -torch.sin(torch.deg2rad(rot_ang_x_deg))],
+                               [0, torch.sin(torch.deg2rad(rot_ang_x_deg)), torch.cos(torch.deg2rad(rot_ang_x_deg))]])
+            Ry = torch.tensor([[torch.cos(torch.deg2rad(rot_ang_y_deg)), 0, torch.sin(torch.deg2rad(rot_ang_y_deg))],
+                               [0, 1, 0],
+                               [-torch.sin(torch.deg2rad(rot_ang_y_deg)), 0, torch.cos(torch.deg2rad(rot_ang_y_deg))]])
+            Rz = torch.tensor([[torch.cos(torch.deg2rad(rot_ang_z_deg)), -torch.sin(torch.deg2rad(rot_ang_z_deg)), 0],
+                               [torch.sin(torch.deg2rad(rot_ang_z_deg)), torch.cos(torch.deg2rad(rot_ang_z_deg)), 0],
+                               [0, 0, 1]])
             R_inv = Rz @ Ry @ Rx
-            uv_coords = np.array([[u], [v], [1.]]).T
+            uv_coords = torch.tensor([[u], [v], [1.]]).T
             dim2Todim3 = s * uv_coords @ A_inv
-            d3_coords = (dim2Todim3 - tvec_torch.numpy()) @ R_inv
-            d3_coords_list.append(d3_coords)
+            d3_coords = (dim2Todim3 - tvec_torch) @ R_inv
+            d3_coords_arr = torch.cat([d3_coords_arr, d3_coords])
 
-        d3_coords_array = np.array(d3_coords_list)
-        print(d3_coords_array.shape)
-        views.append(d3_coords_array)
+        views.append(d3_coords_arr[1:])
         i += 1
+    views = torch.tensor(np.array(views, dtype=np.float32))
+    coords3d = torch.tensor(torch.all(views, dim=0).unsqueeze(0),dtype=torch.float32)
 
-    return torch.tensor(np.array(views, dtype=np.float32))
+    return coords3d

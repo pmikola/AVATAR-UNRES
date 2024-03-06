@@ -183,7 +183,7 @@ val_size = meta.shape[0] - train_sizev2
 train_indices = indices[:train_sizev2]
 val_indices = indices[train_sizev2:]
 
-num_epochs = 10
+num_epochs = 1
 batch_size = 5
 bloss = []
 bbloss = []
@@ -315,12 +315,10 @@ start = time.time()
 with torch.set_grad_enabled(False):
     for i in range(int(gtdlen)):
         c, v, a, f = model(meta_test[i], c, v, a, f)
-        print(c.shape, '0')
         c = project_2d_to_3d(c, model.dist_coef, model.rot_ang, model.distances, model.camera_params)
         v = project_2d_to_3d(v, model.dist_coef, model.rot_ang, model.distances, model.camera_params)
         a = project_2d_to_3d(a, model.dist_coef, model.rot_ang, model.distances, model.camera_params)
         f = project_2d_to_3d(f, model.dist_coef, model.rot_ang, model.distances, model.camera_params)
-        print(c.shape, '1')
         pred_dynamics_pos.append(c.numpy())
         pred_dynamics_vel.append(v.numpy())
         pred_dynamics_acc.append(a.numpy())
@@ -367,11 +365,10 @@ for i in range(int(gtdlen)):
     s2 = time.time()
     gt = ground_truth_dynamics_pos[i]
     pred = pred_dynamics_pos[i]
-
-    folding = prota.scatter(gt)
-    # folding_pred = prota.scatter(pred)
+    folding = prota.scatter(gt[:, 0], gt[:, 1], gt[:, 2],c='b')
+    folding_pred = prota.scatter(pred[:, 0], pred[:, 1], pred[:, 2], c='r')
     #
-    ims.append([folding])
+    ims.append([folding,folding_pred])
     e2 = time.time()
 
     sys.stdout.write("\rPlotting... %f" % round((e2 - s2), 2))
@@ -380,7 +377,7 @@ for i in range(int(gtdlen)):
 
 ani = animation.ArtistAnimation(fig, ims, interval=100, blit=True, repeat=True)
 end = time.time()
-print('Plotting Time :', round((end - start), 2), ' [s]')
+print('\nPlotting Time :', round((end - start), 2), ' [s]')
 
 # ani.save("proteinA-folding_3d_v1_.gif", dpi=600, writer=PillowWriter(fps=20))
 plt.show()
