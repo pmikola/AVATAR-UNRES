@@ -1,3 +1,5 @@
+import time
+
 import cv2
 import numpy as np
 import torch
@@ -118,19 +120,21 @@ def project3d_to_2d(space3d, dist_coef, rot_ang, dist, camera_params, rotation_s
         # Rotation
         rvec_torch = torch.tensor(angle, dtype=torch.float32)
         # Translation
-        tvec_torch = torch.tensor([-trans_x, -trans_y, -trans_z], dtype=torch.float32)
+        tvec_torch = torch.tensor([[-trans_x], [-trans_y], [-trans_z]], dtype=torch.float32)
 
         view_2d, _ = cv2.projectPoints(space3d.detach().numpy(), rvec_torch.detach().numpy(),
                                        tvec_torch.detach().numpy(),
                                        camera_matrix.numpy(), dist_coeffs.numpy())
+
         views.append(view_2d)
     return np.array(views)
 
 
 def create_2d_views(grid_step, space3d, dist_coef, rot_ang, distances, camera_params, device, rotation_step=180,
                     rotation_flag=0):
-    grid_padding = int((1 / grid_step))
+    grid_padding = int((1 / grid_step)) + 10
     img_views = []
+    # print(space3d.shape)
     for k in range(space3d.shape[0]):
         views = project3d_to_2d(space3d[k], dist_coef, rot_ang, distances, camera_params, rotation_step=rotation_step,
                                 rotation_flag=rotation_flag)
@@ -151,9 +155,9 @@ def project_2d_to_3d(view2d, dist_coef, rot_ang, dist, camera_params, rotation_s
     fy = camera_params[1]
     cx = camera_params[2]
     cy = camera_params[3]
-    camera_matrix = torch.tensor([[fx, 0, cx],
-                                  [0, fy, cy],
-                                  [0, 0, 1]], dtype=torch.float32)
+    K = torch.tensor([[fx, 0, cx],
+                      [0, fy, cy],
+                      [0, 0, 1]], dtype=torch.float32)
 
     rotation_angles = np.array([(0, 0, 0),
                                 (rot_ang[0], 0, 0),
@@ -176,27 +180,34 @@ def project_2d_to_3d(view2d, dist_coef, rot_ang, dist, camera_params, rotation_s
         # rot_matrix = cv2.Rodrigues(rvec_torch.numpy())
 
         # Translation
-        tvec_torch = torch.tensor([-trans_x, -trans_y, -trans_z], dtype=torch.float32)
+        tvec_torch = torch.tensor([[-trans_x], [-trans_y], [-trans_z]], dtype=torch.float32)
         # Inverse transformation
         # print(view2d[0][i].cpu().numpy().shape, '\n', camera_matrix.numpy().shape, '\n', dist_coef.numpy().shape)
-        height, width = view2d[0][i].cpu().numpy().shape
-
         # plt.imshow(view2d[0][i].cpu())
         # plt.show()
         k = 92
-        view2d_tensor = torch.tensor(view2d[0][i].cpu())
-        topk_values, topk_indices = torch.topk(view2d_tensor.view(-1), k)
-        y_indices = topk_indices // width
-        x_indices = topk_indices % width
-        pixels = torch.stack((x_indices, y_indices), dim=1).float()
+        view2d_tensor = torch.tensor(view2d[0][i])
+        # topk_values, topk_indices = torch.topk(view2d_tensor.view(-1), k)
+        # y_indices = topk_indices // width
+        # x_indices = topk_indices % width
+        # pixels = torch.stack((x_indices, y_indices), dim=1).float()
+        # print(pixels)
+
+        pixels = torch.nonzero(view2d_tensor > 0.01)
 
         # undistorted normalized points
-        # xy_undistorted = cv2.undistortPoints(pixels, camera_matrix.numpy(), dist_coef.numpy())
         d3_coords_arr = torch.empty((1, 3))
-        for _ in range(pixels.shape[0]):
-            s = 1.
-            u, v = pixels[i].squeeze()
-            A_inv = torch.inverse(camera_matrix)
+        for j in range(pixels.shape[0]):
+            s = 0.01
+            grid_padding = (int((1 / s)) + 10) / 2
+
+            # xy_undistorted = cv2.undistortPoints(pixels[j].unsqueeze(0).unsqueeze(0).numpy(), camera_matrix.numpy(),
+            #                                      dist_coef.numpy())
+            # xy = np.array(xy_undistorted)
+            # u = xy[0][0][0]
+            # v = xy[0][0][1]
+            u, v = pixels[j].squeeze()  #
+            K_inv = torch.linalg.inv(K)
             rot_ang_x_deg = rvec_torch[0]
             rot_ang_y_deg = rvec_torch[1]
             rot_ang_z_deg = rvec_torch[2]
@@ -210,15 +221,37 @@ def project_2d_to_3d(view2d, dist_coef, rot_ang, dist, camera_params, rotation_s
             Rz = torch.tensor([[torch.cos(torch.deg2rad(rot_ang_z_deg)), -torch.sin(torch.deg2rad(rot_ang_z_deg)), 0],
                                [torch.sin(torch.deg2rad(rot_ang_z_deg)), torch.cos(torch.deg2rad(rot_ang_z_deg)), 0],
                                [0, 0, 1]])
-            R_inv = Rz @ Ry @ Rx
-            uv_coords = torch.tensor([[u], [v], [1.]]).T
-            dim2Todim3 = s * uv_coords @ A_inv
-            d3_coords = (dim2Todim3 - tvec_torch) @ R_inv
-            d3_coords_arr = torch.cat([d3_coords_arr, d3_coords])
+            # R_inv = Rz @ Ry @ Rx
+            R = Rx @ Ry @ Rz
 
+            uv_coords = torch.tensor([[u - grid_padding], [v - grid_padding], [1.]])
+            pc = s*K_inv @ uv_coords
+            # T = torch.cat([R_inv, tvec_torch], dim=1)
+            pw = tvec_torch + (R @ pc)
+            d3_coords = torch.tensor([pw[0][0], pw[1][0], pw[2][0]])
+            # print(d3_coords)
+            # time.sleep(2)
+            d3_coords_arr = torch.cat([d3_coords_arr, d3_coords.unsqueeze(0)],dim=0)
+        l = k - d3_coords_arr.shape[0] + 1
+        if l > 0:
+            perm = torch.randperm(d3_coords_arr.size(0))
+            idx = perm[:l]
+            sample = d3_coords_arr[idx]
+            d3_coords_arr = torch.cat([d3_coords_arr, sample])
+
+        else:
+            pass
         views.append(d3_coords_arr[1:])
         i += 1
-    views = torch.tensor(np.array(views, dtype=np.float32))
-    coords3d = torch.tensor(torch.all(views, dim=0).unsqueeze(0),dtype=torch.float32)
 
+    views = torch.tensor(np.array(views))
+
+    # fig = plt.figure()
+    # prota = fig.add_subplot(111, projection='3d')
+    # prota.scatter(views[:, :, 0], views[:, :, 1], views[:, :, 2], c='r')
+    # plt.show()
+    coords3d = views[0, :, :]
+    for m in range(1, views.shape[0]):
+        coords3d = torch.cat([coords3d, views[m, :, :]])
+    # print(coords3d.shape)
     return coords3d

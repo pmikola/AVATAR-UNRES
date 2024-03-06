@@ -54,11 +54,12 @@ class AvatarUNRES(nn.Module):
         self.kernel_s = 3
         self.filters = 10
         self.dropout = 0.1
-        self.grid_step = 0.05
+        self.grid_step = 0.01
         self.num_of_views = 8
         self.dist_coef = torch.tensor([0., 0., 0., 0., 0.], dtype=torch.float32)
-        self.rot_ang = torch.tensor([10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120], dtype=torch.float32)
-        self.distances = torch.tensor([0., 0., 2], dtype=torch.float32)
+        # self.rot_ang = torch.tensor([10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120], dtype=torch.float32)
+        self.rot_ang = torch.tensor([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], dtype=torch.float32)
+        self.distances = torch.tensor([0., 0., 2.], dtype=torch.float32)
         self.camera_params = torch.tensor([1., 1., 1., 1.], dtype=torch.float32)
         self.uplift_meta = nn.Linear(self.meta.shape[1], self.uplift_dim, bias=True)
 
