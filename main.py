@@ -319,17 +319,24 @@ with torch.set_grad_enabled(False):
                                                                                dim=0), torch.unsqueeze(
             accelerations_test3d[i], dim=0), torch.unsqueeze(forces_test3d[i], dim=0)
 
-        c = create_2d_views(model.grid_step, c, model.dist_coef, model.rot_ang, model.distances, model.camera_params,
-                            device)
-        v = create_2d_views(model.grid_step, v, model.dist_coef, model.rot_ang, model.distances, model.camera_params,
-                            device)
-        a = create_2d_views(model.grid_step, a, model.dist_coef, model.rot_ang, model.distances, model.camera_params,
-                            device)
-        f = create_2d_views(model.grid_step, f, model.dist_coef, model.rot_ang, model.distances,
-                            model.camera_params,
-                            device)
+        c, cz = create_2d_views(model.grid_step, c, model.dist_coef, model.rot_ang, model.distances,
+                                model.camera_params,
+                                device)
+        v, _ = create_2d_views(model.grid_step, v, model.dist_coef, model.rot_ang, model.distances, model.camera_params,
+                               device)
+        a, _ = create_2d_views(model.grid_step, a, model.dist_coef, model.rot_ang, model.distances, model.camera_params,
+                               device)
+        f, _ = create_2d_views(model.grid_step, f, model.dist_coef, model.rot_ang, model.distances,
+                               model.camera_params,
+                               device)
 
         c = project_2d_to_3d(c, model.dist_coef, model.rot_ang, model.distances, model.camera_params)
+        cz = cz.squeeze(0)
+        coords_z = cz[0, :]
+        for m in range(1, cz.shape[0]):
+            coords_z = torch.cat([coords_z, cz[m, :]])
+
+        c[:, 2] = coords_z.cpu()
         v = project_2d_to_3d(v, model.dist_coef, model.rot_ang, model.distances, model.camera_params)
         a = project_2d_to_3d(a, model.dist_coef, model.rot_ang, model.distances, model.camera_params)
         f = project_2d_to_3d(f, model.dist_coef, model.rot_ang, model.distances, model.camera_params)
@@ -379,8 +386,8 @@ for i in range(int(gtdlen)):
     s2 = time.time()
     gt = ground_truth_dynamics_pos[i]
     pred = pred_dynamics_pos[i]
-    folding = prota.scatter(gt[:, 0], gt[:, 1], gt[:, 2], c='b',alpha=0.5)
-    folding_pred = prota.scatter(pred[:, 0], pred[:, 1], pred[:, 2], c='r',alpha=0.5)
+    folding = prota.scatter(gt[:, 0], gt[:, 1], gt[:, 2], c='b', alpha=0.5)
+    folding_pred = prota.scatter(pred[:, 0], pred[:, 1], pred[:, 2], c='r', alpha=0.5)
     #
     ims.append([folding, folding_pred])
     e2 = time.time()

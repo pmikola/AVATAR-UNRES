@@ -57,8 +57,8 @@ class AvatarUNRES(nn.Module):
         self.grid_step = 0.01
         self.num_of_views = 8
         self.dist_coef = torch.tensor([0., 0., 0., 0., 0.], dtype=torch.float32)
-        # self.rot_ang = torch.tensor([10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120], dtype=torch.float32)
-        self.rot_ang = torch.tensor([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], dtype=torch.float32)
+        self.rot_ang = torch.tensor([100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1020], dtype=torch.float32)
+        # self.rot_ang = torch.tensor([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], dtype=torch.float32)
         self.distances = torch.tensor([0., 0., 2.], dtype=torch.float32)
         self.camera_params = torch.tensor([1., 1., 1., 1.], dtype=torch.float32)
         self.uplift_meta = nn.Linear(self.meta.shape[1], self.uplift_dim, bias=True)
@@ -113,14 +113,14 @@ class AvatarUNRES(nn.Module):
 
     def forward(self, meta, pos, vel, acc, force):
 
-        p = create_2d_views(self.grid_step, pos, self.dist_coef, self.rot_ang, self.distances, self.camera_params,
-                            device)
-        v = create_2d_views(self.grid_step, vel, self.dist_coef, self.rot_ang, self.distances, self.camera_params,
-                            device)
-        a = create_2d_views(self.grid_step, acc, self.dist_coef, self.rot_ang, self.distances, self.camera_params,
-                            device)
-        f = create_2d_views(self.grid_step, force, self.dist_coef, self.rot_ang, self.distances, self.camera_params,
-                            device)
+        p, _ = create_2d_views(self.grid_step, pos, self.dist_coef, self.rot_ang, self.distances, self.camera_params,
+                                device)
+        v, _ = create_2d_views(self.grid_step, vel, self.dist_coef, self.rot_ang, self.distances, self.camera_params,
+                               device)
+        a, _ = create_2d_views(self.grid_step, acc, self.dist_coef, self.rot_ang, self.distances, self.camera_params,
+                               device)
+        f, _ = create_2d_views(self.grid_step, force, self.dist_coef, self.rot_ang, self.distances, self.camera_params,
+                               device)
 
         p = F.relu(self.conv_p_uplift(p))
         v = F.relu(self.conv_v_uplift(v))
