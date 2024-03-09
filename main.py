@@ -256,19 +256,19 @@ start = time.time()
 #             preds_test = torch.cat([c_test, v_test, a_test, f_test], dim=1)
 #
 #             pt = create_2d_views(model.grid_step, coords3d[tval_1], model.dist_coef, model.rot_ang,
-#                                  model.distances,
+#                                  model.translation,
 #                                  model.camera_params,
 #                                  device)
 #             vt = create_2d_views(model.grid_step, velocities3d[tval_1], model.dist_coef, model.rot_ang,
-#                                  model.distances,
+#                                  model.translation,
 #                                  model.camera_params,
 #                                  device)
 #             at = create_2d_views(model.grid_step, accelerations3d[tval_1], model.dist_coef, model.rot_ang,
-#                                  model.distances,
+#                                  model.translation,
 #                                  model.camera_params,
 #                                  device)
 #             ft = create_2d_views(model.grid_step, forces3d[tval_1], model.dist_coef, model.rot_ang,
-#                                  model.distances,
+#                                  model.translation,
 #                                  model.camera_params,
 #                                  device)
 #
@@ -319,27 +319,27 @@ with torch.set_grad_enabled(False):
                                                                                dim=0), torch.unsqueeze(
             accelerations_test3d[i], dim=0), torch.unsqueeze(forces_test3d[i], dim=0)
 
-        c, cz = create_2d_views(model.grid_step, c, model.dist_coef, model.rot_ang, model.distances,
+        c, cz = create_2d_views(model.grid_step, c, model.dist_coef, model.rot_ang, model.translation,
                                 model.camera_params,
                                 device)
-        v, _ = create_2d_views(model.grid_step, v, model.dist_coef, model.rot_ang, model.distances, model.camera_params,
+        v, _ = create_2d_views(model.grid_step, v, model.dist_coef, model.rot_ang, model.translation, model.camera_params,
                                device)
-        a, _ = create_2d_views(model.grid_step, a, model.dist_coef, model.rot_ang, model.distances, model.camera_params,
+        a, _ = create_2d_views(model.grid_step, a, model.dist_coef, model.rot_ang, model.translation, model.camera_params,
                                device)
-        f, _ = create_2d_views(model.grid_step, f, model.dist_coef, model.rot_ang, model.distances,
+        f, _ = create_2d_views(model.grid_step, f, model.dist_coef, model.rot_ang, model.translation,
                                model.camera_params,
                                device)
 
-        c = project_2d_to_3d(c, model.dist_coef, model.rot_ang, model.distances, model.camera_params)
+        c = project_2d_to_3d(c, model.dist_coef, model.rot_ang, model.translation, model.camera_params)
         cz = cz.squeeze(0)
         coords_z = cz[0, :]
         for m in range(1, cz.shape[0]):
             coords_z = torch.cat([coords_z, cz[m, :]])
 
         c[:, 2] = coords_z.cpu()
-        v = project_2d_to_3d(v, model.dist_coef, model.rot_ang, model.distances, model.camera_params)
-        a = project_2d_to_3d(a, model.dist_coef, model.rot_ang, model.distances, model.camera_params)
-        f = project_2d_to_3d(f, model.dist_coef, model.rot_ang, model.distances, model.camera_params)
+        v = project_2d_to_3d(v, model.dist_coef, model.rot_ang, model.translation, model.camera_params)
+        a = project_2d_to_3d(a, model.dist_coef, model.rot_ang, model.translation, model.camera_params)
+        f = project_2d_to_3d(f, model.dist_coef, model.rot_ang, model.translation, model.camera_params)
         pred_dynamics_pos.append(c.numpy())
         pred_dynamics_vel.append(v.numpy())
         pred_dynamics_acc.append(a.numpy())
