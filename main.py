@@ -319,27 +319,27 @@ with torch.set_grad_enabled(False):
                                                                                dim=0), torch.unsqueeze(
             accelerations_test3d[i], dim=0), torch.unsqueeze(forces_test3d[i], dim=0)
 
-        c, cz = create_2d_views(model.grid_step, c, model.dist_coef, model.rot_ang, model.translation,
+        c, cz = create_2d_views(model.grid_step,model.grid_padding, c, model.dist_coef, model.rot_ang, model.translation,
                                 model.camera_params,
                                 device)
-        v, _ = create_2d_views(model.grid_step, v, model.dist_coef, model.rot_ang, model.translation, model.camera_params,
+        v, _ = create_2d_views(model.grid_step,model.grid_padding, v, model.dist_coef, model.rot_ang, model.translation, model.camera_params,
                                device)
-        a, _ = create_2d_views(model.grid_step, a, model.dist_coef, model.rot_ang, model.translation, model.camera_params,
+        a, _ = create_2d_views(model.grid_step,model.grid_padding, a, model.dist_coef, model.rot_ang, model.translation, model.camera_params,
                                device)
-        f, _ = create_2d_views(model.grid_step, f, model.dist_coef, model.rot_ang, model.translation,
+        f, _ = create_2d_views(model.grid_step,model.grid_padding, f, model.dist_coef, model.rot_ang, model.translation,
                                model.camera_params,
                                device)
 
-        c = project_2d_to_3d(c, model.dist_coef, model.rot_ang, model.translation, model.camera_params)
+        c = project_2d_to_3d(c, model.dist_coef, model.rot_ang, model.translation, model.camera_params,model.grid_padding)
         cz = cz.squeeze(0)
         coords_z = cz[0, :]
         for m in range(1, cz.shape[0]):
             coords_z = torch.cat([coords_z, cz[m, :]])
 
         c[:, 2] = coords_z.cpu()
-        v = project_2d_to_3d(v, model.dist_coef, model.rot_ang, model.translation, model.camera_params)
-        a = project_2d_to_3d(a, model.dist_coef, model.rot_ang, model.translation, model.camera_params)
-        f = project_2d_to_3d(f, model.dist_coef, model.rot_ang, model.translation, model.camera_params)
+        v = project_2d_to_3d(v, model.dist_coef, model.rot_ang, model.translation, model.camera_params,model.grid_padding)
+        a = project_2d_to_3d(a, model.dist_coef, model.rot_ang, model.translation, model.camera_params,model.grid_padding)
+        f = project_2d_to_3d(f, model.dist_coef, model.rot_ang, model.translation, model.camera_params,model.grid_padding)
         pred_dynamics_pos.append(c.numpy())
         pred_dynamics_vel.append(v.numpy())
         pred_dynamics_acc.append(a.numpy())

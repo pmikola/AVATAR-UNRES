@@ -54,13 +54,18 @@ class AvatarUNRES(nn.Module):
         self.kernel_s = 3
         self.filters = 10
         self.dropout = 0.1
-        self.grid_step = 0.01
+        self.grid_step = 0.005
+        self.grid_padding = int((1 / self.grid_step)) * 2
+        self.fx = 1.
+        self.fy = 1.
+        self.Cx = 1.
+        self.Cy = 1.
         self.num_of_views = 8
         self.dist_coef = torch.tensor([0., 0., 0., 0., 0.], dtype=torch.float32)
         # self.rot_ang = torch.tensor([100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1020], dtype=torch.float32)
         self.rot_ang = torch.tensor([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], dtype=torch.float32)
-        self.translation = torch.tensor([0., 0., 0.], dtype=torch.float32)
-        self.camera_params = torch.tensor([1., 1., 1., 1.], dtype=torch.float32)
+        self.translation = torch.tensor([1., 2., 3.], dtype=torch.float32)
+        self.camera_params = torch.tensor([self.fx, self.fy, self.Cx *self.grid_step,  self.Cy *self.grid_step], dtype=torch.float32)
         self.uplift_meta = nn.Linear(self.meta.shape[1], self.uplift_dim, bias=True)
 
         self.conv_p_uplift = nn.Conv2d(self.num_of_views, self.filters, kernel_size=self.kernel_s,

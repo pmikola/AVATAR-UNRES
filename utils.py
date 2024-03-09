@@ -132,6 +132,7 @@ def project3d_to_2d(space3d, dist_coef, rot_ang, dist, camera_params, rotation_s
         R = rodrigues(rvec_torch[0], rvec_torch[1], rvec_torch[2], 0)
         RT = torch.cat([R, tvec_torch], dim=1)
         view2d = camera_matrix @ RT @ space3d.T
+
         # print(view2d[:2, :].T.unsqueeze(1))
         # print(view_2d.shape, viewd2d[:2, :].T.unsqueeze(1).numpy().shape)
         views.append(view2d[:2, :].T.unsqueeze(1).numpy())
@@ -140,9 +141,8 @@ def project3d_to_2d(space3d, dist_coef, rot_ang, dist, camera_params, rotation_s
     return np.array(views), np.array(z_axis)
 
 
-def create_2d_views(grid_step, space3d, dist_coef, rot_ang, distances, camera_params, device, rotation_step=180,
+def create_2d_views(grid_step,grid_padding, space3d, dist_coef, rot_ang, distances, camera_params, device, rotation_step=180,
                     rotation_flag=0):
-    grid_padding = int((1 / grid_step))*2
     img_views = []
     # print(space3d.shape)
     z = []
@@ -155,8 +155,8 @@ def create_2d_views(grid_step, space3d, dist_coef, rot_ang, distances, camera_pa
         for j in range(views.shape[0]):
             view = torch.full((int(1 / grid_step) + grid_padding, int(1 / grid_step) + grid_padding), 0.)
             for i in range(views[0].shape[0]):
-                idx_x = (views[j][i][0][0] / grid_step).astype(int) + int(grid_padding/2)
-                idx_y = (views[j][i][0][1] / grid_step).astype(int) + int(grid_padding/2)
+                idx_x = (views[j][i][0][0] / grid_step).astype(int) + int(grid_padding / 2)
+                idx_y = (views[j][i][0][1] / grid_step).astype(int) + int(grid_padding / 2)
                 view[idx_x, idx_y] = 1.
             exploded_views.append(view)
         img_views.append(exploded_views)
@@ -164,7 +164,7 @@ def create_2d_views(grid_step, space3d, dist_coef, rot_ang, distances, camera_pa
     return torch.tensor(np.array(img_views), device=device), torch.tensor(np.array(z), device=device)
 
 
-def project_2d_to_3d(view2d, dist_coef, rot_ang, dist, camera_params, rotation_step=180., rotation_flag=1):
+def project_2d_to_3d(view2d, dist_coef, rot_ang, dist, camera_params,grid_padding, rotation_step=180., rotation_flag=1):
     fx = camera_params[0]
     fy = camera_params[1]
     cx = camera_params[2]
@@ -213,8 +213,8 @@ def project_2d_to_3d(view2d, dist_coef, rot_ang, dist, camera_params, rotation_s
         # undistorted normalized points
         d3_coords_arr = torch.empty((1, 3))
         for j in range(pixels.shape[0]):
-            s = 0.01
-            grid_padding = int((1 / s))*2
+            s = 0.005
+
 
             # xy_undistorted = cv2.undistortPoints(pixels[j].unsqueeze(0).unsqueeze(0).numpy(), camera_matrix.numpy(),
             #                                      dist_coef.numpy())
@@ -223,17 +223,19 @@ def project_2d_to_3d(view2d, dist_coef, rot_ang, dist, camera_params, rotation_s
             # v = xy[0][0][1]
             u, v = pixels[j].squeeze()
             K_inv = torch.linalg.inv(K)
+
             rot_ang_x_deg = rvec_torch[0]
             rot_ang_y_deg = rvec_torch[1]
             rot_ang_z_deg = rvec_torch[2]
-            R = rodrigues(rot_ang_x_deg, rot_ang_y_deg, rot_ang_z_deg, 0)
+            R = rodrigues(rot_ang_x_deg, rot_ang_y_deg, rot_ang_z_deg, 1)
 
-            uv_coords = torch.tensor([[u - grid_padding/2], [v - grid_padding/2], [1.]])
+            uv_coords = torch.tensor([[u - grid_padding / 2], [v - grid_padding / 2], [1.]])
 
-            pc = s * K_inv @ uv_coords
-            # T = torch.cat([R_inv, tvec_torch], dim=1)
-            pw = tvec_torch + (R @ pc)
-
+            # pc = s * K_inv @ uv_coords
+            # # T = torch.cat([R_inv, tvec_torch], dim=1)
+            # pw = tvec_torch + (R @ pc)
+            pw = R @ (s * K_inv @ uv_coords - tvec_torch)
+            # pw = (s*uv_coords@K_inv - tvec_torch)@R
             d3_coords = torch.tensor([pw[0][0], pw[1][0], pw[2][0]])
             # print(d3_coords)
             # time.sleep(2)
