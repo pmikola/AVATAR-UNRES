@@ -1,4 +1,5 @@
 import gc
+import math
 import sys
 
 import torch.nn
@@ -13,11 +14,8 @@ import torch.nn.functional as F
 from TCN3d import TCN3d
 from utils import create_2d_views
 
-if torch.cuda.is_available():
-    device = torch.device('cuda')
-else:
-    device = torch.device('cpu')
-torch.autograd.set_detect_anomaly(True)
+
+# torch.autograd.set_detect_anomaly(True)
 
 
 # class dynamicAct(nn.Module):
@@ -54,18 +52,23 @@ class AvatarUNRES(nn.Module):
         self.kernel_s = 3
         self.filters = 10
         self.dropout = 0.1
-        self.grid_step = 0.005
+        self.grid_step = 0.01
         self.grid_padding = int((1 / self.grid_step)) * 2
-        self.fx = 1.
-        self.fy = 1.
-        self.Cx = 1.
-        self.Cy = 1.
-        self.num_of_views = 8
+        self.d = 1.
+        self.fov = 60.
+        self.fx = self.d  # / (2 * math.tan(0.5 * self.fov)) # aspect ratio x
+        self.fy = self.d  # / (2 * math.tan(0.5 * self.fov)) # aspect ratio y
+        self.fz = self.d  # / (2 * math.tan(0.5 * 90.))
+        self.Cx, self.Cy, self.Cz = 1., 1., 0.  # principal points where optic axis intersect with the image plane
+        self.gamma = 0.
+        self.tx, self.ty, self.tz = 0., 0., 0.
+        self.num_of_views = 4
         self.dist_coef = torch.tensor([0., 0., 0., 0., 0.], dtype=torch.float32)
-        # self.rot_ang = torch.tensor([100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1020], dtype=torch.float32)
-        self.rot_ang = torch.tensor([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], dtype=torch.float32)
-        self.translation = torch.tensor([1., 2., 3.], dtype=torch.float32)
-        self.camera_params = torch.tensor([self.fx, self.fy, self.Cx *self.grid_step,  self.Cy *self.grid_step], dtype=torch.float32)
+        # self.rot_ang = torch.tensor([15, 30, 45, 60, 75, 90, 0, 0, 0, 0, 0, 0], dtype=torch.float32)
+        self.rot_ang = torch.tensor([0, 30, 60, 90], dtype=torch.float32)
+        self.translation = torch.tensor([self.tx, self.ty, self.tz], dtype=torch.float32)
+        self.camera_params = torch.tensor([self.fx, self.fy, self.fz, self.Cx, self.Cy, self.Cz],
+                                          dtype=torch.float32)
         self.uplift_meta = nn.Linear(self.meta.shape[1], self.uplift_dim, bias=True)
 
         self.conv_p_uplift = nn.Conv2d(self.num_of_views, self.filters, kernel_size=self.kernel_s,
@@ -118,14 +121,15 @@ class AvatarUNRES(nn.Module):
 
     def forward(self, meta, pos, vel, acc, force):
 
-        p, _ = create_2d_views(self.grid_step, pos, self.dist_coef, self.rot_ang, self.translation, self.camera_params,
-                                device)
-        v, _ = create_2d_views(self.grid_step, vel, self.dist_coef, self.rot_ang, self.translation, self.camera_params,
-                               device)
-        a, _ = create_2d_views(self.grid_step, acc, self.dist_coef, self.rot_ang, self.translation, self.camera_params,
-                               device)
-        f, _ = create_2d_views(self.grid_step, force, self.dist_coef, self.rot_ang, self.translation, self.camera_params,
-                               device)
+        p, pz = create_2d_views(pos, self.grid_step, self.grid_padding, self.dist_coef, self.rot_ang, self.translation,
+                                self.camera_params, self.device)
+        v, vz = create_2d_views(vel, self.grid_step, self.grid_padding, self.dist_coef, self.rot_ang, self.translation,
+                                self.camera_params, self.device)
+        a, az = create_2d_views(acc, self.grid_step, self.grid_padding, self.dist_coef, self.rot_ang, self.translation,
+                                self.camera_params, self.device)
+        f, fz = create_2d_views(force, self.grid_step, self.grid_padding, self.dist_coef, self.rot_ang,
+                                self.translation,
+                                self.camera_params, self.device)
 
         p = F.relu(self.conv_p_uplift(p))
         v = F.relu(self.conv_v_uplift(v))
@@ -142,12 +146,11 @@ class AvatarUNRES(nn.Module):
         a = self.dropout1p(a)
         f = self.dropout1p(f)
 
-        p = F.sigmoid(self.conv_p_downlift(p))
-        v = F.sigmoid(self.conv_v_downlift(v))
-        a = F.sigmoid(self.conv_a_downlift(a))
-        f = F.sigmoid(self.conv_f_downlift(f))
-
+        p = torch.sigmoid(self.conv_p_downlift(p))
+        v = torch.sigmoid(self.conv_v_downlift(v))
+        a = torch.sigmoid(self.conv_a_downlift(a))
+        f = torch.sigmoid(self.conv_f_downlift(f))
         # m = self.uplift_meta(meta)
         # pred_p, pred_v, pred_a, pred_f = p.squeeze(1), v.squeeze(1), a.squeeze(
         #     1), f.squeeze(1)
-        return p, v, a, f
+        return p, v, a, f, pz, vz, az, fz
