@@ -205,99 +205,99 @@ optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=1e-3)
 # optimizer = torch.optim.RMSprop(model.parameters(), lr=1e-4, weight_decay=1e-4)
 loss_idx = 0
 start = time.time()
-for epoch in range(num_epochs):
-
-    torch.set_grad_enabled(True)
-    model.train()
-    model.batch_size = batch_size
-    # for param_group in optimizer.param_groups:
-    #     param_group['lr'] = lr
-
-    # RANDOM POINTS DYNAMIC dt LEARNING WITH STEP SIZE 1
-    # t = random.sample(range(0, meta.shape[0] - 1), batch_size)
-    t = torch.randperm(train_indices.numel())[:batch_size]
-    t_1 = [s.item() + 1 for s in t]
-    c_train, v_train, a_train, f_train, c_tz, v_tz, a_tz, f_tz = model(meta[t], coords3d[t], velocities3d[t],
-                                                                       accelerations3d[t], forces3d[t])
-    preds_train = torch.cat([c_train, v_train, a_train, f_train], dim=1)
-    p, pz = create_2d_views(coords3d[t_1], model.grid_step, model.grid_padding, model.dist_coef, model.rot_ang,
-                            model.translation,
-                            model.camera_params,
-                            model.device)
-    v, vz = create_2d_views(velocities3d[t_1], model.grid_step, model.grid_padding, model.dist_coef, model.rot_ang,
-                            model.translation,
-                            model.camera_params,
-                            model.device)
-    a, az = create_2d_views(accelerations3d[t_1], model.grid_step, model.grid_padding, model.dist_coef, model.rot_ang,
-                            model.translation,
-                            model.camera_params,
-                            model.device)
-    f, fz = create_2d_views(forces3d[t_1], model.grid_step, model.grid_padding, model.dist_coef, model.rot_ang,
-                            model.translation,
-                            model.camera_params,
-                            model.device)
-
-    target_train = torch.cat([p, v, a, f], dim=1)
-    # RANDOM POINTS DYNAMIC dt LEARNING WITH STEP SIZE 1
-    loss = criterion(preds_train, target_train)
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
-
-    # Print progress
-    if epoch % 10 == 0:
-        with torch.set_grad_enabled(False):
-            model.eval()
-            tval = val_indices
-
-            # tval = random.sample(range(0, meta.shape[0] - 1), batch_size)
-            tval_1 = torch.tensor([s.item() + 1 for s in tval])
-
-            model.batch_size = coords3d[tval].shape[0]
-            for param_group in optimizer.param_groups:
-                param_group['lr'] = lr
-
-            c_test, v_test, a_test, f_test, c_tz, v_tz, a_tz, f_tz = model(meta[tval], coords3d[tval],
-                                                                           velocities3d[tval],
-                                                                           accelerations3d[tval],
-                                                                           forces3d[tval])
-            preds_test = torch.cat([c_test, v_test, a_test, f_test], dim=1)
-
-            pt, ptz = create_2d_views(coords3d[tval_1], model.grid_step, model.grid_padding, model.dist_coef,
-                                      model.rot_ang,
-                                      model.translation,
-                                      model.camera_params,
-                                      model.device)
-            vt, vtz = create_2d_views(velocities3d[tval_1], model.grid_step, model.grid_padding, model.dist_coef,
-                                      model.rot_ang,
-                                      model.translation,
-                                      model.camera_params,
-                                      model.device)
-            at, atz = create_2d_views(accelerations3d[tval_1], model.grid_step, model.grid_padding, model.dist_coef,
-                                      model.rot_ang,
-                                      model.translation,
-                                      model.camera_params,
-                                      model.device)
-            ft, ftz = create_2d_views(forces3d[tval_1], model.grid_step, model.grid_padding, model.dist_coef,
-                                      model.rot_ang,
-                                      model.translation,
-                                      model.camera_params,
-                                      model.device)
-
-            target_test = torch.cat([pt, vt, at, ft], dim=1)
-            loss_val = criterion(preds_test, target_test)
-            bloss.append(loss.item())
-            bbloss.append(loss_val.item())
-            if epoch > 20 and loss_val < max(bbloss) and loss < max(bloss):
-                torch.save(model.state_dict(), model_path)
-                # batch_size += 1
-                # if batch_size > 100:
-                #     batch_size -= 1
-            sys.stdout.write("\rEpoch : %f" % round(epoch + 1))
-            sys.stdout.write("/ : %f" % round(num_epochs))
-            sys.stdout.write(" Train Loss : %f" % (round(loss.item(), 2)))
-            sys.stdout.write(" Validation Loss : %f" % (round(loss_val.item(), 2)))
-            sys.stdout.flush()
+# for epoch in range(num_epochs):
+#
+#     torch.set_grad_enabled(True)
+#     model.train()
+#     model.batch_size = batch_size
+#     # for param_group in optimizer.param_groups:
+#     #     param_group['lr'] = lr
+#
+#     # RANDOM POINTS DYNAMIC dt LEARNING WITH STEP SIZE 1
+#     # t = random.sample(range(0, meta.shape[0] - 1), batch_size)
+#     t = torch.randperm(train_indices.numel())[:batch_size]
+#     t_1 = [s.item() + 1 for s in t]
+#     c_train, v_train, a_train, f_train, c_tz, v_tz, a_tz, f_tz = model(meta[t], coords3d[t], velocities3d[t],
+#                                                                        accelerations3d[t], forces3d[t])
+#     preds_train = torch.cat([c_train, v_train, a_train, f_train], dim=1)
+#     p, pz = create_2d_views(coords3d[t_1], model.grid_step, model.grid_padding, model.dist_coef, model.rot_ang,
+#                             model.translation,
+#                             model.camera_params,
+#                             model.device)
+#     v, vz = create_2d_views(velocities3d[t_1], model.grid_step, model.grid_padding, model.dist_coef, model.rot_ang,
+#                             model.translation,
+#                             model.camera_params,
+#                             model.device)
+#     a, az = create_2d_views(accelerations3d[t_1], model.grid_step, model.grid_padding, model.dist_coef, model.rot_ang,
+#                             model.translation,
+#                             model.camera_params,
+#                             model.device)
+#     f, fz = create_2d_views(forces3d[t_1], model.grid_step, model.grid_padding, model.dist_coef, model.rot_ang,
+#                             model.translation,
+#                             model.camera_params,
+#                             model.device)
+#
+#     target_train = torch.cat([p, v, a, f], dim=1)
+#     # RANDOM POINTS DYNAMIC dt LEARNING WITH STEP SIZE 1
+#     loss = criterion(preds_train, target_train)
+#     optimizer.zero_grad()
+#     loss.backward()
+#     optimizer.step()
+#
+#     # Print progress
+#     if epoch % 10 == 0:
+#         with torch.set_grad_enabled(False):
+#             model.eval()
+#             tval = val_indices
+#
+#             # tval = random.sample(range(0, meta.shape[0] - 1), batch_size)
+#             tval_1 = torch.tensor([s.item() + 1 for s in tval])
+#
+#             model.batch_size = coords3d[tval].shape[0]
+#             for param_group in optimizer.param_groups:
+#                 param_group['lr'] = lr
+#
+#             c_test, v_test, a_test, f_test, c_tz, v_tz, a_tz, f_tz = model(meta[tval], coords3d[tval],
+#                                                                            velocities3d[tval],
+#                                                                            accelerations3d[tval],
+#                                                                            forces3d[tval])
+#             preds_test = torch.cat([c_test, v_test, a_test, f_test], dim=1)
+#
+#             pt, ptz = create_2d_views(coords3d[tval_1], model.grid_step, model.grid_padding, model.dist_coef,
+#                                       model.rot_ang,
+#                                       model.translation,
+#                                       model.camera_params,
+#                                       model.device)
+#             vt, vtz = create_2d_views(velocities3d[tval_1], model.grid_step, model.grid_padding, model.dist_coef,
+#                                       model.rot_ang,
+#                                       model.translation,
+#                                       model.camera_params,
+#                                       model.device)
+#             at, atz = create_2d_views(accelerations3d[tval_1], model.grid_step, model.grid_padding, model.dist_coef,
+#                                       model.rot_ang,
+#                                       model.translation,
+#                                       model.camera_params,
+#                                       model.device)
+#             ft, ftz = create_2d_views(forces3d[tval_1], model.grid_step, model.grid_padding, model.dist_coef,
+#                                       model.rot_ang,
+#                                       model.translation,
+#                                       model.camera_params,
+#                                       model.device)
+#
+#             target_test = torch.cat([pt, vt, at, ft], dim=1)
+#             loss_val = criterion(preds_test, target_test)
+#             bloss.append(loss.item())
+#             bbloss.append(loss_val.item())
+#             if epoch > 20 and loss_val < max(bbloss) and loss < max(bloss):
+#                 torch.save(model.state_dict(), model_path)
+#                 # batch_size += 1
+#                 # if batch_size > 100:
+#                 #     batch_size -= 1
+#             sys.stdout.write("\rEpoch : %f" % round(epoch + 1))
+#             sys.stdout.write("/ : %f" % round(num_epochs))
+#             sys.stdout.write(" Train Loss : %f" % (round(loss.item(), 2)))
+#             sys.stdout.write(" Validation Loss : %f" % (round(loss_val.item(), 2)))
+#             sys.stdout.flush()
 
 end = time.time()
 print('\nLearning Time : ', round(end - start, 2), ' [s]')

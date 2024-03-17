@@ -59,9 +59,9 @@ class AvatarUNRES(nn.Module):
         self.fz = 1.  # / (2 * math.tan(0.5 * 90.))
         self.Cx, self.Cy, self.Cz = 1., 1., 0.  # principal points where optic axis intersect with the image plane
         self.gamma = 0.
-        self.tx, self.ty, self.tz = 0., 0., 0.
+        self.tx, self.ty, self.tz = -0.4, 0.5, 0.1
         self.num_of_views = 4
-        self.dist_coef = torch.tensor([0., 0., 0., 0., 0.], dtype=torch.float32)
+        self.dist_coef = torch.tensor([20., 20., 30., 40., 80.], dtype=torch.float32)
         # self.rot_ang = torch.tensor([15, 30, 45, 60, 75, 90, 0, 0, 0, 0, 0, 0], dtype=torch.float32)
         self.rot_ang = torch.tensor([0, 0, 0, 0, 0], dtype=torch.float32)
         self.translation = torch.tensor([self.tx, self.ty, self.tz], dtype=torch.float32)
