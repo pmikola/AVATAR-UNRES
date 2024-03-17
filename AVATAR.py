@@ -52,20 +52,18 @@ class AvatarUNRES(nn.Module):
         self.kernel_s = 3
         self.filters = 10
         self.dropout = 0.1
-        self.grid_step = 0.01
-        self.grid_padding = int((1 / self.grid_step)) * 2
-        self.d = 1.
-        self.fov = 60.
-        self.fx = self.d  # / (2 * math.tan(0.5 * self.fov)) # aspect ratio x
-        self.fy = self.d  # / (2 * math.tan(0.5 * self.fov)) # aspect ratio y
-        self.fz = self.d  # / (2 * math.tan(0.5 * 90.))
+        self.grid_step = 0.005
+        self.grid_padding = int((4. / self.grid_step))
+        self.fx = 1.  # / (2 * math.tan(0.5 * self.fov)) # aspect ratio x
+        self.fy = 1.  # / (2 * math.tan(0.5 * self.fov)) # aspect ratio y
+        self.fz = 1.  # / (2 * math.tan(0.5 * 90.))
         self.Cx, self.Cy, self.Cz = 1., 1., 0.  # principal points where optic axis intersect with the image plane
         self.gamma = 0.
         self.tx, self.ty, self.tz = 0., 0., 0.
         self.num_of_views = 4
         self.dist_coef = torch.tensor([0., 0., 0., 0., 0.], dtype=torch.float32)
         # self.rot_ang = torch.tensor([15, 30, 45, 60, 75, 90, 0, 0, 0, 0, 0, 0], dtype=torch.float32)
-        self.rot_ang = torch.tensor([0, 30, 60, 90], dtype=torch.float32)
+        self.rot_ang = torch.tensor([0, 0, 0, 0, 0], dtype=torch.float32)
         self.translation = torch.tensor([self.tx, self.ty, self.tz], dtype=torch.float32)
         self.camera_params = torch.tensor([self.fx, self.fy, self.fz, self.Cx, self.Cy, self.Cz],
                                           dtype=torch.float32)
