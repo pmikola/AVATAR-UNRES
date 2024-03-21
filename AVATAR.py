@@ -63,7 +63,7 @@ class AvatarUNRES(nn.Module):
         self.num_of_views = 4
         self.dist_coef = torch.tensor([20., 20., 30., 40., 80.], dtype=torch.float32)
         # self.rot_ang = torch.tensor([15, 30, 45, 60, 75, 90, 0, 0, 0, 0, 0, 0], dtype=torch.float32)
-        self.rot_ang = torch.tensor([0, 0, 0, 0, 0], dtype=torch.float32)
+        self.rot_ang = torch.tensor([20, 40, 10, 0, 0], dtype=torch.float32)
         self.translation = torch.tensor([self.tx, self.ty, self.tz], dtype=torch.float32)
         self.camera_params = torch.tensor([self.fx, self.fy, self.fz, self.Cx, self.Cy, self.Cz],
                                           dtype=torch.float32)

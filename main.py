@@ -352,19 +352,19 @@ with torch.set_grad_enabled(False):
                                   model.device)
 
         p = project_2d_to_3d(pt, ptz, model.dist_coef, model.rot_ang, model.translation, model.camera_params,
-                             model.grid_step, model.grid_padding)
+                             model.grid_step, model.grid_padding,model.device)
         v = project_2d_to_3d(vt, vtz, model.dist_coef, model.rot_ang, model.translation, model.camera_params,
-                             model.grid_step, model.grid_padding)
+                             model.grid_step, model.grid_padding,model.device)
         a = project_2d_to_3d(at, atz, model.dist_coef, model.rot_ang, model.translation, model.camera_params,
-                             model.grid_step, model.grid_padding)
+                             model.grid_step, model.grid_padding,model.device)
         f = project_2d_to_3d(ft, ftz, model.dist_coef, model.rot_ang, model.translation, model.camera_params,
-                             model.grid_step, model.grid_padding)
+                             model.grid_step, model.grid_padding,model.device)
         # c = torch.unsqueeze(c[0, :, :], dim=0)
         # print(torch.max(c),torch.min(c))
-        pred_dynamics_pos.append(p.numpy())
-        pred_dynamics_vel.append(v.numpy())
-        pred_dynamics_acc.append(a.numpy())
-        pred_dynamics_force.append(f.numpy())
+        pred_dynamics_pos.append(p.cpu().numpy())
+        pred_dynamics_vel.append(v.cpu().numpy())
+        pred_dynamics_acc.append(a.cpu().numpy())
+        pred_dynamics_force.append(f.cpu().numpy())
 
 end = time.time()
 print('Sequence generation speed :', int(gtdlen) / round((end - start), 4), ' [fps]')  # speed
@@ -407,7 +407,7 @@ for i in range(int(gtdlen)):
     s2 = time.time()
     gt = ground_truth_dynamics_pos[i]
     pred = pred_dynamics_pos[i]
-    folding = prota.scatter(gt[:, 0], gt[:, 1], gt[:, 2], c='b', alpha=0.5)
+    folding = prota.scatter(gt[:, 0], gt[:, 1], gt[:, 2], c='b', alpha=0.6)
     folding_pred = prota.scatter(pred[:, 0], pred[:, 1], pred[:, 2], c='r', alpha=0.3)
     ims.append([folding, folding_pred])
     e2 = time.time()
