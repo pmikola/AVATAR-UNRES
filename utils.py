@@ -248,12 +248,21 @@ def project_2d_to_3d(view2d, depth, dist_coef, rot_ang, dist, camera_params, gri
     c3d_out = torch.empty((1, 3), device=device)
     sub_diff = torch.abs(torch.subtract(c3d.unsqueeze(1), c3d.unsqueeze(0)))
     threshold = 0.005
-    for i in range(sub_diff.shape[0]):
-        matches = (sub_diff[i, :, :] < threshold)
-        all_true_mask = torch.all(matches, dim=1)
-        idxt = torch.nonzero(all_true_mask, as_tuple=False)
-        if c3d[idxt].shape[0] > 4:
-            c3d_out = torch.cat([c3d_out, torch.mean(c3d[idxt], dim=0)])
+    # for i in range(sub_diff.shape[0]):
+    #     matches = (sub_diff[i, :, :] < threshold)
+    #     all_true_mask = torch.all(matches, dim=1)
+    #     idxt = torch.nonzero(all_true_mask, as_tuple=False)
+    #     if c3d[idxt].shape[0] > 4:
+    #         c3d_out = torch.cat([c3d_out, torch.mean(c3d[idxt], dim=0)])
+
+    matches = sub_diff < threshold
+    all_true_mask = torch.all(matches, dim=2)
+    idxt = torch.nonzero(all_true_mask.view(all_true_mask.shape[0], -1), as_tuple=False)
+    unique_rows, counts = idxt[:, 0].unique(return_counts=True)
+    filtered_idx = unique_rows[counts > 4]
+    for idx in filtered_idx:
+        matches_idx = idxt[idxt[:, 0] == idx][:, 1]
+        c3d_out = torch.cat([c3d_out, torch.mean(c3d[matches_idx], dim=0, keepdim=True)], dim=0)
 
     c3d_out = c3d_out[1:]
     if c3d_out.shape[0] < k:
