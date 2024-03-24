@@ -243,9 +243,30 @@ def project_2d_to_3d(view2d, depth, dist_coef, rot_ang, dist, camera_params, gri
                 pass
         c3d = torch.cat([c3d, d3_coords_arr], dim=0)
     c3d = c3d[1:]
+    c3d = c3d[~torch.all(c3d > torch.tensor([1., 1., 1.], device=device), dim=1)]
+    c3d = c3d[~torch.all(c3d < torch.tensor([0., 0., 0.], device=device), dim=1)]
+    c3d_out = torch.empty((1, 3), device=device)
+    sub_diff = torch.abs(torch.subtract(c3d.unsqueeze(1), c3d.unsqueeze(0)))
+    threshold = 0.005
+    for i in range(sub_diff.shape[0]):
+        matches = (sub_diff[i, :, :] < threshold)
+        all_true_mask = torch.all(matches, dim=1)
+        idxt = torch.nonzero(all_true_mask, as_tuple=False)
+        if c3d[idxt].shape[0] > 4:
+            c3d_out = torch.cat([c3d_out, torch.mean(c3d[idxt], dim=0)])
 
-
-    return c3d
+    c3d_out = c3d_out[1:]
+    if c3d_out.shape[0] < k:
+        l = k - c3d_out.shape[0]
+        indices = torch.randint(high=c3d_out.shape[0], size=(l,))
+        c3d_out = torch.cat([c3d_out, c3d_out[indices]])
+    elif c3d_out.shape[0] > k:
+        # unique_tenor = torch.unique(c3d_out, dim=1)
+        # print(unique_tenor.shape[0] == c3d_out.shape[0])
+        c3d_out = c3d_out[:k]
+    else:
+        pass
+    return c3d_out
 
 
 def rodrigues(rot_x, rot_y, rot_z, inv_flag, device):

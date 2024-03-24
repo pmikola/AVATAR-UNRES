@@ -415,7 +415,7 @@ for i in range(int(gtdlen)):
     sys.stdout.write(' [s] | Loop : %i ' % i)
     sys.stdout.flush()
 
-ani = animation.ArtistAnimation(fig, ims, interval=50, blit=True, repeat=True)
+ani = animation.ArtistAnimation(fig, ims, interval=250, blit=True, repeat=True)
 end = time.time()
 print('\nPlotting Time :', round((end - start), 2), ' [s]')
 
