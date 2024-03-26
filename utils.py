@@ -185,96 +185,97 @@ def project_2d_to_3d(view2d, depth, dist_coef, rot_ang, dist, camera_params, gri
     k = 92
     no_quadrants = 4
     # _, rvec, tvec = cv2.solvePnP(object_points, view2d.cpu(), camera_matrix.numpy(), dist_coef.numpy())
-    c3d = torch.empty((1, 3), device=device)
+    c3d = torch.empty((1,1, 3), device=device)
 
     # Mirror = torch.tensor([[1., 0., 0., 0.], [0., 1., 0., 0.], [0., 0., 1., 0.], [0., 0., 0., 1.]])
-    for i, rvec in enumerate(rotation_angles):
+    for h in range(view2d.shape[0]):
+        for i, rvec in enumerate(rotation_angles):
 
-        R = rodrigues(rvec[0], rvec[1], rvec[2], 0, device)
-        d3_coords_arr = torch.empty((1, 3), device=device)
-        for quadrant in range(view2d[0][i].shape[0]):
-            if quadrant == 0:
-                h, g = 1., 1.
-            elif quadrant == 1:
-                h, g = 1., -1.
-            elif quadrant == 2:
-                h, g = -1., 1.
-            else:
-                h, g = -1., -1.
-            # Translation
-            tvec_torch = torch.tensor([[trans_x], [trans_y], [trans_z]], device=device, dtype=torch.float32)
-            # Inverse transformation
+            R = rodrigues(rvec[0], rvec[1], rvec[2], 0, device)
+            d3_coords_arr = torch.empty((1, 3), device=device)
+            for quadrant in range(view2d[h][i].shape[0]):
+                if quadrant == 0:
+                    h, g = 1., 1.
+                elif quadrant == 1:
+                    h, g = 1., -1.
+                elif quadrant == 2:
+                    h, g = -1., 1.
+                else:
+                    h, g = -1., -1.
+                # Translation
+                tvec_torch = torch.tensor([[trans_x], [trans_y], [trans_z]], device=device, dtype=torch.float32)
+                # Inverse transformation
 
-            view2d_tensor = view2d[0][i][quadrant]
-            threshold = 0.002
-            pixels_positive = (view2d_tensor > threshold).nonzero()
-            pixels_negative = (view2d_tensor < -threshold).nonzero()
-            pixels = torch.cat([pixels_positive, pixels_negative], dim=0)
-            pixels, pixels_ind = torch.topk(pixels, k=k, dim=0)
+                view2d_tensor = view2d[h][i][quadrant]
+                threshold = 0.002
+                pixels_positive = (view2d_tensor > threshold).nonzero()
+                pixels_negative = (view2d_tensor < -threshold).nonzero()
+                pixels = torch.cat([pixels_positive, pixels_negative], dim=0)
+                pixels, pixels_ind = torch.topk(pixels, k=k, dim=0)
 
-            for j in range(pixels.shape[0]):
-                s = grid_step
-                u, v = pixels[j]
-                w = view2d_tensor[u, v]
-                points_3d_transformed = torch.tensor(
-                    [[h * ((u - grid_padding / 2) * s)], [g * ((v - grid_padding / 2) * s)], [w]], device=device)
-                homogenous_coords = torch.cat([points_3d_transformed, torch.ones((1, 1), device=device)], dim=0)
+                for j in range(pixels.shape[0]):
+                    s = grid_step
+                    u, v = pixels[j]
+                    w = view2d_tensor[u, v]
+                    points_3d_transformed = torch.tensor(
+                        [[h * ((u - grid_padding / 2) * s)], [g * ((v - grid_padding / 2) * s)], [w]], device=device)
+                    homogenous_coords = torch.cat([points_3d_transformed, torch.ones((1, 1), device=device)], dim=0)
 
-                points_3d_transformed_world = K_inv @ I_full @ homogenous_coords
+                    points_3d_transformed_world = K_inv @ I_full @ homogenous_coords
 
-                points_3d_transformed_world = torch.cat(
-                    [points_3d_transformed_world, torch.ones((1, 1), device=device)], dim=0)
-                RT_inv = torch.cat([R.T, -R.T @ tvec_torch], dim=1)
+                    points_3d_transformed_world = torch.cat(
+                        [points_3d_transformed_world, torch.ones((1, 1), device=device)], dim=0)
+                    RT_inv = torch.cat([R.T, -R.T @ tvec_torch], dim=1)
 
-                RT_inv = torch.cat([RT_inv, dim_equalizer], dim=0)
-                points_3d = RT_inv @ points_3d_transformed_world
-                d3_coords = torch.tensor([points_3d[0][0], points_3d[1][0], points_3d[2][0]], device=device)
-                d3_coords_arr = torch.cat([d3_coords_arr, d3_coords.unsqueeze(0)], dim=0)
+                    RT_inv = torch.cat([RT_inv, dim_equalizer], dim=0)
+                    points_3d = RT_inv @ points_3d_transformed_world
+                    d3_coords = torch.tensor([points_3d[0][0], points_3d[1][0], points_3d[2][0]], device=device)
+                    d3_coords_arr = torch.cat([d3_coords_arr, d3_coords.unsqueeze(0)], dim=0)
 
-            l = k - d3_coords_arr.shape[0] + 1
-            if l > 0:
-                perm = torch.randperm(d3_coords_arr.size(0), device=device)
-                idx = perm[:l]
-                sample = d3_coords_arr[idx]
-                d3_coords_arr = torch.cat([d3_coords_arr, sample])
-                d3_coords_arr = d3_coords_arr[1:]
-            elif d3_coords_arr.shape[0] > k:
-                d3_coords_arr = d3_coords_arr[1:]
-                indices = torch.randperm(d3_coords_arr.size(0), device=device)[:k]
-                d3_coords_arr = d3_coords_arr[indices]
-            else:
-                pass
-        c3d = torch.cat([c3d, d3_coords_arr], dim=0)
+                l = k - d3_coords_arr.shape[0] + 1
+                if l > 0:
+                    perm = torch.randperm(d3_coords_arr.size(0), device=device)
+                    idx = perm[:l]
+                    sample = d3_coords_arr[idx]
+                    d3_coords_arr = torch.cat([d3_coords_arr, sample])
+                    d3_coords_arr = d3_coords_arr[1:]
+                elif d3_coords_arr.shape[0] > k:
+                    d3_coords_arr = d3_coords_arr[1:]
+                    indices = torch.randperm(d3_coords_arr.size(0), device=device)[:k]
+                    d3_coords_arr = d3_coords_arr[indices]
+                else:
+                    pass
+            c3d = torch.cat([c3d, d3_coords_arr], dim=0)
 
-    c3d = c3d[1:]
-    c3d = c3d[~torch.all(c3d > torch.tensor([1., 1., 1.], device=device), dim=1)]
-    c3d = c3d[~torch.all(c3d < torch.tensor([0., 0., 0.], device=device), dim=1)]
-    c3d_out = torch.empty((1, 3), device=device)
-    sub_diff = torch.abs(torch.subtract(c3d.unsqueeze(1), c3d.unsqueeze(0)))
-    threshold = 0.005
+        c3d = c3d[1:]
+        c3d = c3d[~torch.all(c3d > torch.tensor([1., 1., 1.], device=device), dim=1)]
+        c3d = c3d[~torch.all(c3d < torch.tensor([0., 0., 0.], device=device), dim=1)]
+        c3d_out = torch.empty((1, 3), device=device)
+        sub_diff = torch.abs(torch.subtract(c3d.unsqueeze(1), c3d.unsqueeze(0)))
+        threshold = 0.005
 
-    matches = sub_diff < threshold
-    all_true_mask = torch.all(matches, dim=2)
-    idxt = torch.nonzero(all_true_mask.view(all_true_mask.shape[0], -1), as_tuple=False)
-    unique_rows, counts = idxt[:, 0].unique(return_counts=True)
-    filtered_idx = unique_rows[counts > 4]
-    for idx in filtered_idx:
-        matches_idx = idxt[idxt[:, 0] == idx][:, 1]
-        c3d_out = torch.cat([c3d_out, torch.mean(c3d[matches_idx], dim=0, keepdim=True)], dim=0)
-    if c3d_out.shape[0] < 1:
-        pass
-    else:
-        c3d_out = c3d_out[1:]
-    if c3d_out.shape[0] < k:
-        l = k - c3d_out.shape[0]
-        indices = torch.randint(high=c3d_out.shape[0], size=(l,))
-        c3d_out = torch.cat([c3d_out, c3d_out[indices]])
-    elif c3d_out.shape[0] > k:
-        # unique_tenor = torch.unique(c3d_out, dim=1)
-        # print(unique_tenor.shape[0] == c3d_out.shape[0])
-        c3d_out = c3d_out[:k]
-    else:
-        pass
+        matches = sub_diff < threshold
+        all_true_mask = torch.all(matches, dim=2)
+        idxt = torch.nonzero(all_true_mask.view(all_true_mask.shape[0], -1), as_tuple=False)
+        unique_rows, counts = idxt[:, 0].unique(return_counts=True)
+        filtered_idx = unique_rows[counts > 4]
+        for idx in filtered_idx:
+            matches_idx = idxt[idxt[:, 0] == idx][:, 1]
+            c3d_out = torch.cat([c3d_out, torch.mean(c3d[matches_idx], dim=0, keepdim=True)], dim=0)
+        if c3d_out.shape[0] < 1:
+            pass
+        else:
+            c3d_out = c3d_out[1:]
+        if c3d_out.shape[0] < k:
+            l = k - c3d_out.shape[0]
+            indices = torch.randint(high=c3d_out.shape[0], size=(l,))
+            c3d_out = torch.cat([c3d_out, c3d_out[indices]])
+        elif c3d_out.shape[0] > k:
+            # unique_tenor = torch.unique(c3d_out, dim=1)
+            # print(unique_tenor.shape[0] == c3d_out.shape[0])
+            c3d_out = c3d_out[:k]
+        else:
+            pass
 
     return c3d_out
 

@@ -186,7 +186,7 @@ train_indices = indices[:train_sizev2]
 val_indices = indices[train_sizev2:]
 
 num_epochs = 10
-batch_size = 3
+batch_size = 2
 bloss = []
 bbloss = []
 model = AvatarUNRES(meta, coords3d, velocities3d, accelerations3d, forces3d).to(
@@ -220,6 +220,7 @@ for epoch in range(num_epochs):
     c_train, v_train, a_train, f_train, c_tz, v_tz, a_tz, f_tz = model(meta[t], coords3d[t], velocities3d[t],
                                                                        accelerations3d[t], forces3d[t])
 
+
     c_train = project_2d_to_3d(c_train, c_tz, model.dist_coef, model.rot_ang, model.translation, model.camera_params,
                                model.grid_step, model.grid_padding, model.device)
     v_train = project_2d_to_3d(v_train, v_tz, model.dist_coef, model.rot_ang, model.translation, model.camera_params,
@@ -228,6 +229,8 @@ for epoch in range(num_epochs):
                                model.grid_step, model.grid_padding, model.device)
     f_train = project_2d_to_3d(f_train, f_tz, model.dist_coef, model.rot_ang, model.translation, model.camera_params,
                                model.grid_step, model.grid_padding, model.device)
+
+    time.sleep(100)
     preds_train = torch.cat([c_train, v_train, a_train, f_train], dim=0)
     # p, pz = create_2d_views(coords3d[t_1], model.grid_step, model.grid_padding, model.dist_coef, model.rot_ang,
     #                         model.translation,
@@ -247,7 +250,6 @@ for epoch in range(num_epochs):
     #                         model.device)
 
     target_train = torch.cat([coords3d[t_1], velocities3d[t_1], accelerations3d[t_1], forces3d[t_1]], dim=1)
-    print(preds_train.shape, target_train.shape)
     # RANDOM POINTS DYNAMIC dt LEARNING WITH STEP SIZE 1
     loss = criterion(preds_train, target_train)
     optimizer.zero_grad()
