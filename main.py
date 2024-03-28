@@ -180,20 +180,20 @@ forces3d, forces_test3d = forces3d[:train_size], forces3d[train_size:]
 # Training loop
 indices = torch.randperm(meta.shape[0] - 1)
 
-train_sizev2 = int(0.95 * meta.shape[0])
+train_sizev2 = int(0.98 * meta.shape[0])
 val_size = meta.shape[0] - train_sizev2
 train_indices = indices[:train_sizev2]
 val_indices = indices[train_sizev2:]
 
-num_epochs = 10
-batch_size = 2
+num_epochs = 20
+batch_size = 10
 bloss = []
 bbloss = []
 model = AvatarUNRES(meta, coords3d, velocities3d, accelerations3d, forces3d).to(
     device)
 model.device = device
-# criterion = nn.MSELoss(reduction='mean')
-criterion = nn.HuberLoss(reduction='mean', delta=1.0)
+criterion = nn.MSELoss(reduction='mean')
+# criterion = nn.HuberLoss(reduction='mean', delta=1.0)
 # criterion = torch.nn.BCELoss()
 lr = 1e-4
 lr_mod = 1
@@ -220,7 +220,6 @@ for epoch in range(num_epochs):
     c_train, v_train, a_train, f_train, c_tz, v_tz, a_tz, f_tz = model(meta[t], coords3d[t], velocities3d[t],
                                                                        accelerations3d[t], forces3d[t])
 
-
     c_train = project_2d_to_3d(c_train, c_tz, model.dist_coef, model.rot_ang, model.translation, model.camera_params,
                                model.grid_step, model.grid_padding, model.device)
     v_train = project_2d_to_3d(v_train, v_tz, model.dist_coef, model.rot_ang, model.translation, model.camera_params,
@@ -230,8 +229,7 @@ for epoch in range(num_epochs):
     f_train = project_2d_to_3d(f_train, f_tz, model.dist_coef, model.rot_ang, model.translation, model.camera_params,
                                model.grid_step, model.grid_padding, model.device)
 
-    time.sleep(100)
-    preds_train = torch.cat([c_train, v_train, a_train, f_train], dim=0)
+    preds_train = torch.cat([c_train, v_train, a_train, f_train], dim=1)
     # p, pz = create_2d_views(coords3d[t_1], model.grid_step, model.grid_padding, model.dist_coef, model.rot_ang,
     #                         model.translation,
     #                         model.camera_params,
@@ -251,6 +249,7 @@ for epoch in range(num_epochs):
 
     target_train = torch.cat([coords3d[t_1], velocities3d[t_1], accelerations3d[t_1], forces3d[t_1]], dim=1)
     # RANDOM POINTS DYNAMIC dt LEARNING WITH STEP SIZE 1
+    # print(preds_train.shape,target_train.shape)
     loss = criterion(preds_train, target_train)
     optimizer.zero_grad()
     loss.backward()
@@ -275,26 +274,26 @@ for epoch in range(num_epochs):
                                                                            forces3d[tval])
             preds_test = torch.cat([c_test, v_test, a_test, f_test], dim=1)
 
-            # pt, ptz = create_2d_views(coords3d[tval_1], model.grid_step, model.grid_padding, model.dist_coef,
-            #                           model.rot_ang,
-            #                           model.translation,
-            #                           model.camera_params,
-            #                           model.device)
-            # vt, vtz = create_2d_views(velocities3d[tval_1], model.grid_step, model.grid_padding, model.dist_coef,
-            #                           model.rot_ang,
-            #                           model.translation,
-            #                           model.camera_params,
-            #                           model.device)
-            # at, atz = create_2d_views(accelerations3d[tval_1], model.grid_step, model.grid_padding, model.dist_coef,
-            #                           model.rot_ang,
-            #                           model.translation,
-            #                           model.camera_params,
-            #                           model.device)
-            # ft, ftz = create_2d_views(forces3d[tval_1], model.grid_step, model.grid_padding, model.dist_coef,
-            #                           model.rot_ang,
-            #                           model.translation,
-            #                           model.camera_params,
-            #                           model.device)
+            pt, ptz = create_2d_views(coords3d[tval_1], model.grid_step, model.grid_padding, model.dist_coef,
+                                      model.rot_ang,
+                                      model.translation,
+                                      model.camera_params,
+                                      model.device)
+            vt, vtz = create_2d_views(velocities3d[tval_1], model.grid_step, model.grid_padding, model.dist_coef,
+                                      model.rot_ang,
+                                      model.translation,
+                                      model.camera_params,
+                                      model.device)
+            at, atz = create_2d_views(accelerations3d[tval_1], model.grid_step, model.grid_padding, model.dist_coef,
+                                      model.rot_ang,
+                                      model.translation,
+                                      model.camera_params,
+                                      model.device)
+            ft, ftz = create_2d_views(forces3d[tval_1], model.grid_step, model.grid_padding, model.dist_coef,
+                                      model.rot_ang,
+                                      model.translation,
+                                      model.camera_params,
+                                      model.device)
 
             target_test = torch.cat([pt, vt, at, ft], dim=1)
             loss_val = criterion(preds_test, target_test)
