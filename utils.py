@@ -118,23 +118,11 @@ def project3d_to_2d(space3d, dist_coef, rot_ang, trans, camera_params, device):
     R_stacked = torch.stack(R_list)
     tvec_stacked = tvec.unsqueeze(0).repeat(R_stacked.shape[0], 1, 1)
     dim_equalizer_stacked = dim_equalizer.unsqueeze(0).repeat(R_stacked.shape[0], 1, 1)
-
     RT = torch.cat([R_stacked, tvec_stacked], dim=2)
     RT = torch.cat([RT, dim_equalizer_stacked], dim=1)
     space3d_transformed = (K @ I_full @ RT @ space3d.T)
     depth.data = space3d_transformed[:, 2, :].unsqueeze(2).unsqueeze(3)  # ([5, 92, 1, 1])
     views.data = space3d_transformed[:, :2, :].unsqueeze(2).permute(0, 3, 2, 1)  # / lambda_z ([5, 92, 1, 2])
-
-    # for i, rvec in enumerate(rotation_angles):
-    #     R = rodrigues(rvec[0], rvec[1], rvec[2], 0, device)
-    #     RT = torch.cat([R, tvec], dim=1)
-    #     RT = torch.cat([RT, dim_equalizer], dim=0)
-    #     space3d_transformed = (K @ I_full @ RT @ space3d.T)
-    #     lambda_z = space3d_transformed[2, :].unsqueeze(0)
-    #     camera_proj_2d = space3d_transformed[:2, :]  # / lambda_z
-    #     depth.data[i] = lambda_z.T.unsqueeze(1)
-    #     views.data[i] = camera_proj_2d.T.unsqueeze(1)
-
     return views, depth
 
 
@@ -234,14 +222,16 @@ def project_2d_to_3d(view2d, depth, dist_coef, rot_ang, dist, camera_params, gri
                 # Inverse transformation
 
                 view2d_tensor = view2d[nbatch][i][quadrant]
-                threshold = 0.001
+                threshold = 0.05 # parametr to learn in the future
                 pixels_positive = (view2d_tensor > threshold).nonzero()
                 pixels_negative = (view2d_tensor < -threshold).nonzero()
                 pixels = torch.cat([pixels_positive, pixels_negative], dim=0)
                 kk = k
-                if pixels.shape[0] < k:
-                    kk = pixels.shape[0]
-                pixels, pixels_ind = torch.topk(pixels, k=kk, dim=0)
+
+                # if pixels.shape[0] < k:
+                #     kk = pixels.shape[0]
+                # pixels, pixels_ind = torch.topk(pixels, k=kk, dim=0)
+
                 for j in range(pixels.shape[0]):
                     s = grid_step
                     u, v = pixels[j]
@@ -251,13 +241,10 @@ def project_2d_to_3d(view2d, depth, dist_coef, rot_ang, dist, camera_params, gri
                         requires_grad=True)
                     homogenous_coords = torch.cat(
                         [points_3d_transformed, torch.ones((1, 1), requires_grad=True, device=device)], dim=0)
-
                     points_3d_transformed_world = K_inv @ I_full @ homogenous_coords
-
                     points_3d_transformed_world = torch.cat(
                         [points_3d_transformed_world, torch.ones((1, 1), requires_grad=True, device=device)], dim=0)
                     RT_inv = torch.cat([R.T, -R.T @ tvec_torch], dim=1)
-
                     RT_inv = torch.cat([RT_inv, dim_equalizer], dim=0)
                     points_3d = RT_inv @ points_3d_transformed_world
                     d3_coords = torch.tensor([points_3d[0][0], points_3d[1][0], points_3d[2][0]], device=device)
@@ -267,7 +254,6 @@ def project_2d_to_3d(view2d, depth, dist_coef, rot_ang, dist, camera_params, gri
                     l = k - d3_coords_arr.shape[0]
                     indices = torch.randint(high=d3_coords_arr.shape[0], size=(l,))
                     d3_coords_arr = torch.cat([d3_coords_arr, d3_coords_arr[indices]])
-
                 elif d3_coords_arr.shape[0] > k:
                     d3_coords_arr = d3_coords_arr[1:]
                     indices = torch.randperm(d3_coords_arr.shape[0], device=device)[:k]
@@ -280,8 +266,7 @@ def project_2d_to_3d(view2d, depth, dist_coef, rot_ang, dist, camera_params, gri
         c3d = c3d[~torch.all(c3d < torch.tensor([0., 0., 0.], device=device), dim=1)]
         c3d_out = torch.empty((1, 3), device=device)
         sub_diff = torch.abs(torch.subtract(c3d.unsqueeze(1), c3d.unsqueeze(0)))
-        threshold = 0.002
-
+        threshold = 0.05  # parametr to learn in the future
         matches = sub_diff < threshold
         all_true_mask = torch.all(matches, dim=2)
         idxt = torch.nonzero(all_true_mask.view(all_true_mask.shape[0], -1), as_tuple=False)
@@ -294,6 +279,7 @@ def project_2d_to_3d(view2d, depth, dist_coef, rot_ang, dist, camera_params, gri
             pass
         else:
             c3d_out = c3d_out[1:]
+
         if c3d_out.shape[0] < k:
             l = k - c3d_out.shape[0]
             indices = torch.randint(high=c3d_out.shape[0], size=(l,))
@@ -305,7 +291,7 @@ def project_2d_to_3d(view2d, depth, dist_coef, rot_ang, dist, camera_params, gri
         else:
             pass
         out = torch.cat([out, c3d_out.unsqueeze(0)], dim=0)
-    return out[1:]
+    return out[1:].squeeze(0)
 
 
 def rodrigues(rot_x, rot_y, rot_z, inv_flag, device):
