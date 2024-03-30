@@ -5,6 +5,7 @@ import numpy as np
 import torch
 from matplotlib import pyplot as plt
 from torch.nn.functional import relu
+from torch.multiprocessing import Pool
 
 
 def switch_order(input):
@@ -113,15 +114,27 @@ def project3d_to_2d(space3d, dist_coef, rot_ang, trans, camera_params, device):
     views = torch.empty((rotation_angles.shape[0], space3d.shape[0], 1, 2), device=device, dtype=torch.float32,
                         requires_grad=True)
 
-    for i, rvec in enumerate(rotation_angles):
-        R = rodrigues(rvec[0], rvec[1], rvec[2], 0, device)
-        RT = torch.cat([R, tvec], dim=1)
-        RT = torch.cat([RT, dim_equalizer], dim=0)
-        space3d_transformed = (K @ I_full @ RT @ space3d.T)
-        lambda_z = space3d_transformed[2, :].unsqueeze(0)
-        camera_proj_2d = space3d_transformed[:2, :]  # / lambda_z
-        depth.data[i] = lambda_z.T.unsqueeze(1)
-        views.data[i] = camera_proj_2d.T.unsqueeze(1)
+    R_list = [rodrigues(rvec[0], rvec[1], rvec[2], 0, device) for rvec in rotation_angles]
+    R_stacked = torch.stack(R_list)
+    tvec_stacked = tvec.unsqueeze(0).repeat(R_stacked.shape[0], 1, 1)
+    dim_equalizer_stacked = dim_equalizer.unsqueeze(0).repeat(R_stacked.shape[0], 1, 1)
+
+    RT = torch.cat([R_stacked, tvec_stacked], dim=2)
+    RT = torch.cat([RT, dim_equalizer_stacked], dim=1)
+    space3d_transformed = (K @ I_full @ RT @ space3d.T)
+    depth.data = space3d_transformed[:, 2, :].unsqueeze(2).unsqueeze(3)  # ([5, 92, 1, 1])
+    views.data = space3d_transformed[:, :2, :].unsqueeze(2).permute(0, 3, 2, 1)  # / lambda_z ([5, 92, 1, 2])
+
+    # for i, rvec in enumerate(rotation_angles):
+    #     R = rodrigues(rvec[0], rvec[1], rvec[2], 0, device)
+    #     RT = torch.cat([R, tvec], dim=1)
+    #     RT = torch.cat([RT, dim_equalizer], dim=0)
+    #     space3d_transformed = (K @ I_full @ RT @ space3d.T)
+    #     lambda_z = space3d_transformed[2, :].unsqueeze(0)
+    #     camera_proj_2d = space3d_transformed[:2, :]  # / lambda_z
+    #     depth.data[i] = lambda_z.T.unsqueeze(1)
+    #     views.data[i] = camera_proj_2d.T.unsqueeze(1)
+
     return views, depth
 
 
@@ -154,16 +167,20 @@ def create_2d_views(space3d, grid_step, grid_padding, dist_coef, rot_ang, distan
                         q_pn.data[idx_x + int(grid_padding / 2), abs(idx_y) + int(grid_padding / 2)] = q_pn[idx_x + int(
                             grid_padding / 2), abs(idx_y) + int(grid_padding / 2)] + z_axis[j][i][0][0]
                     elif idx_x < 0 and idx_y > 0:
-                        q_np.data[abs(idx_x) + int(grid_padding / 2), idx_y + int(grid_padding / 2)] = q_np[abs(idx_x) + int(
-                            grid_padding / 2), idx_y + int(grid_padding / 2)] + z_axis[j][i][0][0]
-                    else:
-                        q_nn.data[abs(idx_x) + int(grid_padding / 2), abs(idx_y) + int(grid_padding / 2)] = q_nn[
+                        q_np.data[abs(idx_x) + int(grid_padding / 2), idx_y + int(grid_padding / 2)] = q_np[
                                                                                                            abs(idx_x) + int(
-                                                                                                               grid_padding / 2), abs(
-                                                                                                               idx_y) + int(
+                                                                                                               grid_padding / 2), idx_y + int(
                                                                                                                grid_padding / 2)] + \
                                                                                                        z_axis[j][i][0][
                                                                                                            0]
+                    else:
+                        q_nn.data[abs(idx_x) + int(grid_padding / 2), abs(idx_y) + int(grid_padding / 2)] = q_nn[
+                                                                                                                abs(idx_x) + int(
+                                                                                                                    grid_padding / 2), abs(
+                                                                                                                    idx_y) + int(
+                                                                                                                    grid_padding / 2)] + \
+                                                                                                            z_axis[j][
+                                                                                                                i][0][0]
             exploded_views.data[j][0] = q_pp
             exploded_views.data[j][1] = q_pn
             exploded_views.data[j][2] = q_np
@@ -194,14 +211,12 @@ def project_2d_to_3d(view2d, depth, dist_coef, rot_ang, dist, camera_params, gri
     trans_y = dist[1]
     trans_z = dist[2]
     k = 92
-    no_quadrants = 4
     # _, rvec, tvec = cv2.solvePnP(object_points, view2d.cpu(), camera_matrix.numpy(), dist_coef.numpy())
     out = torch.empty((1, k, 3), device=device, requires_grad=True)
     c3d = torch.empty((1, 3), device=device, requires_grad=True)
     # Mirror = torch.tensor([[1., 0., 0., 0.], [0., 1., 0., 0.], [0., 0., 1., 0.], [0., 0., 0., 1.]])
     for nbatch in range(view2d.shape[0]):
         for i, rvec in enumerate(rotation_angles):
-
             R = rodrigues(rvec[0], rvec[1], rvec[2], 0, device)
             d3_coords_arr = torch.empty((1, 3), device=device, requires_grad=True)
             for quadrant in range(view2d[nbatch][i].shape[0]):
@@ -214,23 +229,28 @@ def project_2d_to_3d(view2d, depth, dist_coef, rot_ang, dist, camera_params, gri
                 else:
                     h, g = -1., -1.
                 # Translation
-                tvec_torch = torch.tensor([[trans_x], [trans_y], [trans_z]], device=device, dtype=torch.float32, requires_grad=True)
+                tvec_torch = torch.tensor([[trans_x], [trans_y], [trans_z]], device=device, dtype=torch.float32,
+                                          requires_grad=True)
                 # Inverse transformation
 
                 view2d_tensor = view2d[nbatch][i][quadrant]
-                threshold = 0.002
+                threshold = 0.001
                 pixels_positive = (view2d_tensor > threshold).nonzero()
                 pixels_negative = (view2d_tensor < -threshold).nonzero()
                 pixels = torch.cat([pixels_positive, pixels_negative], dim=0)
-                pixels, pixels_ind = torch.topk(pixels, k=k, dim=0)
-
+                kk = k
+                if pixels.shape[0] < k:
+                    kk = pixels.shape[0]
+                pixels, pixels_ind = torch.topk(pixels, k=kk, dim=0)
                 for j in range(pixels.shape[0]):
                     s = grid_step
                     u, v = pixels[j]
                     w = view2d_tensor[u, v]
                     points_3d_transformed = torch.tensor(
-                        [[h * ((u - grid_padding / 2) * s)], [g * ((v - grid_padding / 2) * s)], [w]], device=device, requires_grad=True)
-                    homogenous_coords = torch.cat([points_3d_transformed, torch.ones((1, 1), requires_grad=True, device=device)], dim=0)
+                        [[h * ((u - grid_padding / 2) * s)], [g * ((v - grid_padding / 2) * s)], [w]], device=device,
+                        requires_grad=True)
+                    homogenous_coords = torch.cat(
+                        [points_3d_transformed, torch.ones((1, 1), requires_grad=True, device=device)], dim=0)
 
                     points_3d_transformed_world = K_inv @ I_full @ homogenous_coords
 
@@ -243,27 +263,24 @@ def project_2d_to_3d(view2d, depth, dist_coef, rot_ang, dist, camera_params, gri
                     d3_coords = torch.tensor([points_3d[0][0], points_3d[1][0], points_3d[2][0]], device=device)
                     d3_coords_arr = torch.cat([d3_coords_arr, d3_coords.unsqueeze(0)], dim=0)
 
-                l = k - d3_coords_arr.shape[0] + 1
-                if l > 0:
-                    perm = torch.randperm(d3_coords_arr.size(0), device=device)
-                    idx = perm[:l]
-                    sample = d3_coords_arr[idx]
-                    d3_coords_arr = torch.cat([d3_coords_arr, sample])
-                    d3_coords_arr = d3_coords_arr[1:]
+                if d3_coords_arr.shape[0] < k:
+                    l = k - d3_coords_arr.shape[0]
+                    indices = torch.randint(high=d3_coords_arr.shape[0], size=(l,))
+                    d3_coords_arr = torch.cat([d3_coords_arr, d3_coords_arr[indices]])
+
                 elif d3_coords_arr.shape[0] > k:
                     d3_coords_arr = d3_coords_arr[1:]
-                    indices = torch.randperm(d3_coords_arr.size(0), device=device)[:k]
+                    indices = torch.randperm(d3_coords_arr.shape[0], device=device)[:k]
                     d3_coords_arr = d3_coords_arr[indices]
                 else:
                     pass
             c3d = torch.cat([c3d, d3_coords_arr], dim=0)
-
         c3d = c3d[1:]
         c3d = c3d[~torch.all(c3d > torch.tensor([1., 1., 1.], device=device), dim=1)]
         c3d = c3d[~torch.all(c3d < torch.tensor([0., 0., 0.], device=device), dim=1)]
         c3d_out = torch.empty((1, 3), device=device)
         sub_diff = torch.abs(torch.subtract(c3d.unsqueeze(1), c3d.unsqueeze(0)))
-        threshold = 0.005
+        threshold = 0.002
 
         matches = sub_diff < threshold
         all_true_mask = torch.all(matches, dim=2)

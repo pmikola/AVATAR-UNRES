@@ -180,13 +180,13 @@ forces3d, forces_test3d = forces3d[:train_size], forces3d[train_size:]
 # Training loop
 indices = torch.randperm(meta.shape[0] - 1)
 
-train_sizev2 = int(0.98 * meta.shape[0])
+train_sizev2 = int(0.995 * meta.shape[0])
 val_size = meta.shape[0] - train_sizev2
 train_indices = indices[:train_sizev2]
 val_indices = indices[train_sizev2:]
 
-num_epochs = 20
-batch_size = 10
+num_epochs = 10
+batch_size = 2
 bloss = []
 bbloss = []
 model = AvatarUNRES(meta, coords3d, velocities3d, accelerations3d, forces3d).to(
@@ -205,110 +205,110 @@ optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=1e-3)
 # optimizer = torch.optim.RMSprop(model.parameters(), lr=1e-4, weight_decay=1e-4)
 loss_idx = 0
 start = time.time()
-for epoch in range(num_epochs):
-
-    torch.set_grad_enabled(True)
-    model.train()
-    model.batch_size = batch_size
-    # for param_group in optimizer.param_groups:
-    #     param_group['lr'] = lr
-
-    # RANDOM POINTS DYNAMIC dt LEARNING WITH STEP SIZE 1
-    # t = random.sample(range(0, meta.shape[0] - 1), batch_size)
-    t = torch.randperm(train_indices.numel())[:batch_size]
-    t_1 = [s.item() + 1 for s in t]
-    c_train, v_train, a_train, f_train, c_tz, v_tz, a_tz, f_tz = model(meta[t], coords3d[t], velocities3d[t],
-                                                                       accelerations3d[t], forces3d[t])
-
-    c_train = project_2d_to_3d(c_train, c_tz, model.dist_coef, model.rot_ang, model.translation, model.camera_params,
-                               model.grid_step, model.grid_padding, model.device)
-    v_train = project_2d_to_3d(v_train, v_tz, model.dist_coef, model.rot_ang, model.translation, model.camera_params,
-                               model.grid_step, model.grid_padding, model.device)
-    a_train = project_2d_to_3d(a_train, a_tz, model.dist_coef, model.rot_ang, model.translation, model.camera_params,
-                               model.grid_step, model.grid_padding, model.device)
-    f_train = project_2d_to_3d(f_train, f_tz, model.dist_coef, model.rot_ang, model.translation, model.camera_params,
-                               model.grid_step, model.grid_padding, model.device)
-
-    preds_train = torch.cat([c_train, v_train, a_train, f_train], dim=1)
-    # p, pz = create_2d_views(coords3d[t_1], model.grid_step, model.grid_padding, model.dist_coef, model.rot_ang,
-    #                         model.translation,
-    #                         model.camera_params,
-    #                         model.device)
-    # v, vz = create_2d_views(velocities3d[t_1], model.grid_step, model.grid_padding, model.dist_coef, model.rot_ang,
-    #                         model.translation,
-    #                         model.camera_params,
-    #                         model.device)
-    # a, az = create_2d_views(accelerations3d[t_1], model.grid_step, model.grid_padding, model.dist_coef, model.rot_ang,
-    #                         model.translation,
-    #                         model.camera_params,
-    #                         model.device)
-    # f, fz = create_2d_views(forces3d[t_1], model.grid_step, model.grid_padding, model.dist_coef, model.rot_ang,
-    #                         model.translation,
-    #                         model.camera_params,
-    #                         model.device)
-
-    target_train = torch.cat([coords3d[t_1], velocities3d[t_1], accelerations3d[t_1], forces3d[t_1]], dim=1)
-    # RANDOM POINTS DYNAMIC dt LEARNING WITH STEP SIZE 1
-    # print(preds_train.shape,target_train.shape)
-    loss = criterion(preds_train, target_train)
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
-
-    # Print progress
-    if epoch % 10 == 0:
-        with torch.set_grad_enabled(False):
-            model.eval()
-            tval = val_indices
-
-            # tval = random.sample(range(0, meta.shape[0] - 1), batch_size)
-            tval_1 = torch.tensor([s.item() + 1 for s in tval])
-
-            model.batch_size = coords3d[tval].shape[0]
-            for param_group in optimizer.param_groups:
-                param_group['lr'] = lr
-
-            c_test, v_test, a_test, f_test, c_tz, v_tz, a_tz, f_tz = model(meta[tval], coords3d[tval],
-                                                                           velocities3d[tval],
-                                                                           accelerations3d[tval],
-                                                                           forces3d[tval])
-            preds_test = torch.cat([c_test, v_test, a_test, f_test], dim=1)
-
-            pt, ptz = create_2d_views(coords3d[tval_1], model.grid_step, model.grid_padding, model.dist_coef,
-                                      model.rot_ang,
-                                      model.translation,
-                                      model.camera_params,
-                                      model.device)
-            vt, vtz = create_2d_views(velocities3d[tval_1], model.grid_step, model.grid_padding, model.dist_coef,
-                                      model.rot_ang,
-                                      model.translation,
-                                      model.camera_params,
-                                      model.device)
-            at, atz = create_2d_views(accelerations3d[tval_1], model.grid_step, model.grid_padding, model.dist_coef,
-                                      model.rot_ang,
-                                      model.translation,
-                                      model.camera_params,
-                                      model.device)
-            ft, ftz = create_2d_views(forces3d[tval_1], model.grid_step, model.grid_padding, model.dist_coef,
-                                      model.rot_ang,
-                                      model.translation,
-                                      model.camera_params,
-                                      model.device)
-
-            target_test = torch.cat([pt, vt, at, ft], dim=1)
-            loss_val = criterion(preds_test, target_test)
-            bloss.append(loss.item())
-            bbloss.append(loss_val.item())
-            if epoch > 20 and loss_val < max(bbloss) and loss < max(bloss):
-                torch.save(model.state_dict(), model_path)
-                # batch_size += 1
-                # if batch_size > 100:
-                #     batch_size -= 1
-            sys.stdout.write("\rEpoch : %f" % round(epoch + 1))
-            sys.stdout.write("/ : %f" % round(num_epochs))
-            sys.stdout.write(" Train Loss : %f" % (round(loss.item(), 2)))
-            sys.stdout.write(" Validation Loss : %f" % (round(loss_val.item(), 2)))
-            sys.stdout.flush()
+# for epoch in range(num_epochs):
+#
+#     torch.set_grad_enabled(True)
+#     model.train()
+#     model.batch_size = batch_size
+#     # for param_group in optimizer.param_groups:
+#     #     param_group['lr'] = lr
+#
+#     # RANDOM POINTS DYNAMIC dt LEARNING WITH STEP SIZE 1
+#     # t = random.sample(range(0, meta.shape[0] - 1), batch_size)
+#     t = torch.randperm(train_indices.numel())[:batch_size]
+#     t_1 = [s.item() + 1 for s in t]
+#     c_train, v_train, a_train, f_train, c_tz, v_tz, a_tz, f_tz = model(meta[t], coords3d[t], velocities3d[t],
+#                                                                        accelerations3d[t], forces3d[t])
+#
+#     c_train = project_2d_to_3d(c_train, c_tz, model.dist_coef, model.rot_ang, model.translation, model.camera_params,
+#                                model.grid_step, model.grid_padding, model.device)
+#     v_train = project_2d_to_3d(v_train, v_tz, model.dist_coef, model.rot_ang, model.translation, model.camera_params,
+#                                model.grid_step, model.grid_padding, model.device)
+#     a_train = project_2d_to_3d(a_train, a_tz, model.dist_coef, model.rot_ang, model.translation, model.camera_params,
+#                                model.grid_step, model.grid_padding, model.device)
+#     f_train = project_2d_to_3d(f_train, f_tz, model.dist_coef, model.rot_ang, model.translation, model.camera_params,
+#                                model.grid_step, model.grid_padding, model.device)
+#
+#     preds_train = torch.cat([c_train, v_train, a_train, f_train], dim=1)
+#     # p, pz = create_2d_views(coords3d[t_1], model.grid_step, model.grid_padding, model.dist_coef, model.rot_ang,
+#     #                         model.translation,
+#     #                         model.camera_params,
+#     #                         model.device)
+#     # v, vz = create_2d_views(velocities3d[t_1], model.grid_step, model.grid_padding, model.dist_coef, model.rot_ang,
+#     #                         model.translation,
+#     #                         model.camera_params,
+#     #                         model.device)
+#     # a, az = create_2d_views(accelerations3d[t_1], model.grid_step, model.grid_padding, model.dist_coef, model.rot_ang,
+#     #                         model.translation,
+#     #                         model.camera_params,
+#     #                         model.device)
+#     # f, fz = create_2d_views(forces3d[t_1], model.grid_step, model.grid_padding, model.dist_coef, model.rot_ang,
+#     #                         model.translation,
+#     #                         model.camera_params,
+#     #                         model.device)
+#
+#     target_train = torch.cat([coords3d[t_1], velocities3d[t_1], accelerations3d[t_1], forces3d[t_1]], dim=1)
+#     # RANDOM POINTS DYNAMIC dt LEARNING WITH STEP SIZE 1
+#     # print(preds_train.shape, target_train.shape)
+#     loss = criterion(preds_train, target_train)
+#     optimizer.zero_grad()
+#     loss.backward()
+#     optimizer.step()
+#
+#     # Print progress
+#     if epoch % 1 == 0:
+#         with torch.set_grad_enabled(False):
+#             model.eval()
+#             tval = val_indices
+#
+#             # tval = random.sample(range(0, meta.shape[0] - 1), batch_size)
+#             tval_1 = torch.tensor([s.item() + 1 for s in tval])
+#
+#             model.batch_size = coords3d[tval].shape[0]
+#             for param_group in optimizer.param_groups:
+#                 param_group['lr'] = lr
+#
+#             c_test, v_test, a_test, f_test, c_tz, v_tz, a_tz, f_tz = model(meta[tval], coords3d[tval],
+#                                                                            velocities3d[tval],
+#                                                                            accelerations3d[tval],
+#                                                                            forces3d[tval])
+#             preds_test = torch.cat([c_test, v_test, a_test, f_test], dim=1)
+#
+#             pt, ptz = create_2d_views(coords3d[tval_1], model.grid_step, model.grid_padding, model.dist_coef,
+#                                       model.rot_ang,
+#                                       model.translation,
+#                                       model.camera_params,
+#                                       model.device)
+#             vt, vtz = create_2d_views(velocities3d[tval_1], model.grid_step, model.grid_padding, model.dist_coef,
+#                                       model.rot_ang,
+#                                       model.translation,
+#                                       model.camera_params,
+#                                       model.device)
+#             at, atz = create_2d_views(accelerations3d[tval_1], model.grid_step, model.grid_padding, model.dist_coef,
+#                                       model.rot_ang,
+#                                       model.translation,
+#                                       model.camera_params,
+#                                       model.device)
+#             ft, ftz = create_2d_views(forces3d[tval_1], model.grid_step, model.grid_padding, model.dist_coef,
+#                                       model.rot_ang,
+#                                       model.translation,
+#                                       model.camera_params,
+#                                       model.device)
+#
+#             target_test = torch.cat([pt, vt, at, ft], dim=1)
+#             loss_val = criterion(preds_test, target_test)
+#             bloss.append(loss.item())
+#             bbloss.append(loss_val.item())
+#             if epoch > 20 and loss_val < max(bbloss) and loss < max(bloss):
+#                 torch.save(model.state_dict(), model_path)
+#                 # batch_size += 1
+#                 # if batch_size > 100:
+#                 #     batch_size -= 1
+#             sys.stdout.write("\rEpoch : %f" % round(epoch + 1))
+#             sys.stdout.write("/ : %f" % round(num_epochs))
+#             sys.stdout.write(" Train Loss : %f" % (round(loss.item(), 2)))
+#             sys.stdout.write(" Validation Loss : %f" % (round(loss_val.item(), 2)))
+#             sys.stdout.flush()
 
 end = time.time()
 print('\nLearning Time : ', round(end - start, 2), ' [s]')
@@ -337,49 +337,49 @@ model.eval()
 start = time.time()
 with torch.set_grad_enabled(False):
     for i in range(int(gtdlen)):
-        p, v, a, f, pz, vz, az, fz = model(meta_test[i], p, v, a, f)
+        # p, v, a, f, pz, vz, az, fz = model(meta_test[i], p, v, a, f)
 
-        # cprim, vprim, aprim, fprim = torch.unsqueeze(coords_test3d[i], dim=0), torch.unsqueeze(velocities_test3d[i],
-        #                                                                                        dim=0), torch.unsqueeze(
-        #     accelerations_test3d[i], dim=0), torch.unsqueeze(forces_test3d[i], dim=0)
-        #
-        # pt, ptz = create_2d_views(cprim, model.grid_step, model.grid_padding, model.dist_coef,
-        #                           model.rot_ang,
-        #                           model.translation,
-        #                           model.camera_params,
-        #                           model.device)
+        cprim, vprim, aprim, fprim = torch.unsqueeze(coords_test3d[i], dim=0), torch.unsqueeze(velocities_test3d[i],
+                                                                                               dim=0), torch.unsqueeze(
+            accelerations_test3d[i], dim=0), torch.unsqueeze(forces_test3d[i], dim=0)
 
-        # vt, vtz = create_2d_views(vprim, model.grid_step, model.grid_padding, model.dist_coef,
-        #                           model.rot_ang,
-        #                           model.translation,
-        #                           model.camera_params,
-        #                           model.device)
-        # at, atz = create_2d_views(aprim, model.grid_step, model.grid_padding, model.dist_coef,
-        #                           model.rot_ang,
-        #                           model.translation,
-        #                           model.camera_params,
-        #                           model.device)
-        # ft, ftz = create_2d_views(fprim, model.grid_step, model.grid_padding, model.dist_coef,
-        #                           model.rot_ang,
-        #                           model.translation,
-        #                           model.camera_params,
-        #                           model.device)
+        pt, ptz = create_2d_views(cprim, model.grid_step, model.grid_padding, model.dist_coef,
+                                model.rot_ang,
+                                model.translation,
+                                model.camera_params,
+                                model.device)
 
-        p = project_2d_to_3d(p, pz, model.dist_coef, model.rot_ang, model.translation, model.camera_params,
+        vt, vtz = create_2d_views(vprim, model.grid_step, model.grid_padding, model.dist_coef,
+                                model.rot_ang,
+                                model.translation,
+                                model.camera_params,
+                                model.device)
+        at, atz = create_2d_views(aprim, model.grid_step, model.grid_padding, model.dist_coef,
+                                model.rot_ang,
+                                model.translation,
+                                model.camera_params,
+                                model.device)
+        ft, ftz = create_2d_views(fprim, model.grid_step, model.grid_padding, model.dist_coef,
+                                model.rot_ang,
+                                model.translation,
+                                model.camera_params,
+                                model.device)
+
+        p = project_2d_to_3d(pt, ptz, model.dist_coef, model.rot_ang, model.translation, model.camera_params,
                              model.grid_step, model.grid_padding, model.device)
-        p = p.unsqueeze(0)
+        # p = p.unsqueeze(0)
 
-        v = project_2d_to_3d(v, vz, model.dist_coef, model.rot_ang, model.translation, model.camera_params,
+        v = project_2d_to_3d(vt, vtz, model.dist_coef, model.rot_ang, model.translation, model.camera_params,
                              model.grid_step, model.grid_padding, model.device)
-        v = v.unsqueeze(0)
+        # v = v.unsqueeze(0)
 
-        a = project_2d_to_3d(a, az, model.dist_coef, model.rot_ang, model.translation, model.camera_params,
+        a = project_2d_to_3d(at, atz, model.dist_coef, model.rot_ang, model.translation, model.camera_params,
                              model.grid_step, model.grid_padding, model.device)
-        a = a.unsqueeze(0)
+        # a = a.unsqueeze(0)
 
-        f = project_2d_to_3d(f, fz, model.dist_coef, model.rot_ang, model.translation, model.camera_params,
+        f = project_2d_to_3d(ft, ftz, model.dist_coef, model.rot_ang, model.translation, model.camera_params,
                              model.grid_step, model.grid_padding, model.device)
-        f = f.unsqueeze(0)
+        # f = f.unsqueeze(0)
 
         # c = torch.unsqueeze(c[0, :, :], dim=0)
         # print(torch.max(c),torch.min(c))
