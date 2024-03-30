@@ -231,7 +231,7 @@ def project_2d_to_3d(view2d, depth, dist_coef, rot_ang, dist, camera_params, gri
                 # if pixels.shape[0] < k:
                 #     kk = pixels.shape[0]
                 # pixels, pixels_ind = torch.topk(pixels, k=kk, dim=0)
-
+                # TODO need to change this to something that will work with test loop without model and with model
                 for j in range(pixels.shape[0]):
                     s = grid_step
                     u, v = pixels[j]
