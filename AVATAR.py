@@ -8,7 +8,6 @@ from torch import nn
 from ncps.torch import LTC
 from ncps.wirings import AutoNCP
 
-from htm_pytorch import HTMAttention
 import torch.nn.functional as F
 
 from TCN3d import TCN3d
