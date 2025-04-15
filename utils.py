@@ -1,8 +1,11 @@
+import os
 import time
 
 import cv2
 import numpy as np
 import torch
+from Bio.PDB import PPBuilder, PDBParser
+from Bio.PDB.Atom import Atom
 from matplotlib import pyplot as plt
 from torch.nn.functional import relu
 from torch.multiprocessing import Pool
@@ -327,3 +330,250 @@ def rodrigues(rot_x, rot_y, rot_z, inv_flag, device):
     else:
         rotation_matrix = rotation_matrix.T
     return rotation_matrix
+
+
+import os
+import numpy as np
+from Bio.PDB import PDBParser, PPBuilder
+
+def clone_atom_as_cb(ca_atom):
+    from Bio.PDB.Atom import Atom
+    original_residue = ca_atom.get_parent()
+    new_atom = Atom(
+        name="CB",
+        coord=ca_atom.coord,
+        bfactor=ca_atom.bfactor,
+        occupancy=ca_atom.occupancy,
+        altloc=ca_atom.altloc,
+        fullname=" CB ",
+        serial_number=ca_atom.serial_number,
+        element="C"
+    )
+    if original_residue is not None:
+        original_residue.add(new_atom)
+
+    return new_atom
+
+def load_unres_ca_sc_atoms(
+    pdb_path,
+    total_residues=46,
+    skip_first_dummy=False,
+    skip_last_dummy=False
+):
+
+    parser = PDBParser(QUIET=True)
+    structure = parser.get_structure("REF", pdb_path)
+
+    model = next(structure.get_models())
+    chain = next(model.get_chains())
+    all_residues = list(chain.get_residues())
+
+    start_idx = 1 if skip_first_dummy else 0
+    end_idx   = -1 if skip_last_dummy else len(all_residues)
+    real_res  = all_residues[start_idx:end_idx]
+
+    if len(real_res) != total_residues:
+        print(f"WARNING: We found {len(real_res)} real residues, expected {total_residues}.")
+
+    ref_atoms = []
+
+    for residue in real_res:
+        resname = residue.resname.strip().upper()
+        ca_atom = None
+        cb_atom = None
+
+        for atom in residue:
+            if atom.is_disordered():
+                atom = atom.disordered_select(atom.disordered_get_id_list()[0])
+
+            aname = atom.get_name().upper()
+            if aname == "CA":
+                ca_atom = atom
+            elif aname == "CB":
+                cb_atom = atom
+
+        if ca_atom is None:
+            print(f"Residue {resname} missing CA. Skipping.")
+            continue
+
+        ref_atoms.append(ca_atom)
+
+        if cb_atom is None:
+            print(f"{resname} missing CB. Duplicating CA for side chain.")
+            cb_atom = clone_atom_as_cb(ca_atom)
+        ref_atoms.append(cb_atom)
+
+    return ref_atoms
+
+def write_multi_model_pdb(positions, ref_atoms, out_pdb="trajectory.pdb"):
+    num_frames, num_atoms, _ = positions.shape
+    if num_atoms != len(ref_atoms):
+        raise ValueError(f"Mismatch: positions has {num_atoms} atoms, "
+                         f"but ref_atoms has {len(ref_atoms)}.")
+
+    with open(out_pdb, "w") as fh:
+        for frame_idx in range(num_frames):
+            fh.write(f"MODEL     {frame_idx+1}\n")
+
+            for atom_idx in range(num_atoms):
+                x, y, z = positions[frame_idx, atom_idx]
+                atom = ref_atoms[atom_idx]
+                residue = atom.get_parent()
+                chain   = residue.get_parent()
+
+                atom_name = atom.get_name()
+                res_name  = residue.resname.strip()
+                chain_id  = chain.id
+                res_seq   = residue.id[1]
+                icode     = residue.id[2].strip() if residue.id[2] else ''
+                element   = atom.element.strip()
+                occupancy = atom.get_occupancy() or 1.0
+                bfactor   = atom.get_bfactor()   or 0.0
+                serial    = atom_idx + 1  # simple approach
+
+
+                line = (
+                    f"ATOM  {serial:5d} {atom_name:>4s} {res_name:3s} {chain_id:1s}"
+                    f"{res_seq:4d}{icode:1s}   "
+                    f"{x:8.3f}{y:8.3f}{z:8.3f}"
+                    f"{occupancy:6.2f}{bfactor:6.2f}"
+                    f"          {element:>2s}\n"
+                )
+                fh.write(line)
+
+            fh.write("ENDMDL\n")
+        fh.write("END\n")
+
+
+def write_single_frame_pdbs(positions, ref_atoms, out_dir="frames", prefix="frame"):
+    if not os.path.exists(out_dir):
+        os.makedirs(out_dir)
+
+    num_frames, num_atoms, _ = positions.shape
+    if num_atoms != len(ref_atoms):
+        raise ValueError("Mismatch between positions and reference atoms length.")
+
+    for frame_idx in range(num_frames):
+        pdb_path = os.path.join(out_dir, f"{prefix}_{frame_idx+1:04d}.pdb")
+        with open(pdb_path, "w") as fh:
+            fh.write(f"MODEL     {frame_idx+1}\n")
+
+            for atom_idx in range(num_atoms):
+                x, y, z = positions[frame_idx, atom_idx]
+                atom = ref_atoms[atom_idx]
+                residue = atom.get_parent()
+                chain   = residue.get_parent()
+
+                # metadata
+                atom_name = atom.get_name()
+                res_name  = residue.resname.strip()
+                chain_id  = chain.id
+                res_seq   = residue.id[1]
+                icode     = residue.id[2].strip() if residue.id[2] else ''
+                element   = atom.element.strip()
+                occupancy = atom.get_occupancy() or 1.0
+                bfactor   = atom.get_bfactor()   or 0.0
+                serial    = atom_idx + 1
+
+                line = (
+                    f"ATOM  {serial:5d} {atom_name:>4s} {res_name:3s} {chain_id:1s}"
+                    f"{res_seq:4d}{icode:1s}   "
+                    f"{x:8.3f}{y:8.3f}{z:8.3f}"
+                    f"{occupancy:6.2f}{bfactor:6.2f}"
+                    f"          {element:>2s}\n"
+                )
+                fh.write(line)
+            fh.write("ENDMDL\n")
+            fh.write("END\n")
+
+def process_pdb_and_generate_animations(
+    pdb_path,
+    pred_positions,
+    gt_positions,
+    output_folder="unres_output_pdbs",
+    separate_frames=False
+):
+    if not os.path.isfile(pdb_path):
+        raise FileNotFoundError(f"Reference PDB not found: {pdb_path}")
+
+    ref_atoms = load_unres_ca_sc_atoms(pdb_path, total_residues=46)
+
+    if len(ref_atoms) != 92:
+        print(f"WARNING: your reference list has {len(ref_atoms)} atoms, not 92. Check data consistency.")
+
+    if not os.path.exists(output_folder):
+        os.makedirs(output_folder)
+
+    if not separate_frames:
+        gt_pdb_path   = os.path.join(output_folder, "ground_truth_trajectory.pdb")
+        pred_pdb_path = os.path.join(output_folder, "predicted_trajectory.pdb")
+
+        print(f"Writing multi-model PDB for GT => {gt_pdb_path}")
+        write_multi_model_pdb(gt_positions, ref_atoms, out_pdb=gt_pdb_path)
+
+        print(f"Writing multi-model PDB for Pred => {pred_pdb_path}")
+        write_multi_model_pdb(pred_positions, ref_atoms, out_pdb=pred_pdb_path)
+
+    else:
+        gt_dir   = os.path.join(output_folder, "ground_truth_frames")
+        pred_dir = os.path.join(output_folder, "predicted_frames")
+
+        print(f"Writing single-frame PDBs for GT => {gt_dir}")
+        write_single_frame_pdbs(gt_positions, ref_atoms, out_dir=gt_dir, prefix="gt_frame")
+
+        print(f"Writing single-frame PDBs for Pred => {pred_dir}")
+        write_single_frame_pdbs(pred_positions, ref_atoms, out_dir=pred_dir, prefix="pred_frame")
+
+    print("Done. Check your output in:", output_folder)
+
+
+def compute_rmsd(coordsA, coordsB, align=False):
+    if coordsA.shape != coordsB.shape:
+        raise ValueError("Shape mismatch between coordsA and coordsB")
+
+    if not align:
+        diff = coordsA - coordsB
+        return np.sqrt(np.mean(np.sum(diff ** 2, axis=1)))
+
+    else:
+        A_center = coordsA.mean(axis=0)
+        B_center = coordsB.mean(axis=0)
+        A = coordsA - A_center
+        B = coordsB - B_center
+
+        H = B.T @ A
+        U, S, Vt = np.linalg.svd(H)
+        R = (U @ Vt).T
+
+        A_aligned = A @ R
+
+        diff = A_aligned - B
+        return np.sqrt(np.mean(np.sum(diff ** 2, axis=1)))
+
+
+import numpy as np
+from Bio.PDB import PDBParser
+
+
+def load_multimodel_pdb_coords(pdb_path):
+    parser = PDBParser(QUIET=True)
+    structure = parser.get_structure("traj", pdb_path)
+
+    all_coords = []
+    for model in structure:
+        model_coords = []
+        for chain in model:
+            for residue in chain:
+                if residue.id[0].strip():
+                    continue
+                for atom in residue:
+                    if atom.is_disordered():
+                        atom = atom.disordered_select(atom.disordered_get_id_list()[0])
+                    model_coords.append(atom.coord)
+
+        model_coords = np.array(model_coords, dtype=np.float32)
+        all_coords.append(model_coords)
+
+    coords = np.stack(all_coords, axis=0)
+    return coords
+

@@ -17,7 +17,8 @@ from matplotlib import pyplot as plt, animation
 from matplotlib.animation import PillowWriter
 from torch import nn, optim
 from AVATAR import AvatarUNRES
-from utils import switch_order, generate_volumetric_data, project3d_to_2d, create_2d_views, project_2d_to_3d
+from utils import switch_order, generate_volumetric_data, project3d_to_2d, create_2d_views, project_2d_to_3d, \
+    process_pdb_and_generate_animations, load_multimodel_pdb_coords, compute_rmsd
 
 random.seed(2024)
 np.random.seed(2024)
@@ -391,7 +392,6 @@ with torch.set_grad_enabled(False):
 end = time.time()
 print('Sequence generation speed :', int(gtdlen) / round((end - start), 4), ' [fps]')  # speed
 pred_dynamics_pos = np.array(pred_dynamics_pos)
-
 pred_dynamics_vel = np.array(pred_dynamics_vel)
 pred_dynamics_acc = np.array(pred_dynamics_acc)
 pred_dynamics_force = np.array(pred_dynamics_force)
@@ -412,6 +412,18 @@ ground_truth_dynamics_vel = np.array(ground_truth_dynamics_vel)
 ground_truth_dynamics_acc = np.array(ground_truth_dynamics_acc)
 ground_truth_dynamics_force = np.array(ground_truth_dynamics_force)
 
+pdb_path = "proteinA/prota_nmr.pdb"
+process_pdb_and_generate_animations(
+    pdb_path,
+    pred_dynamics_pos,
+    ground_truth_dynamics_pos,
+    output_folder="animation_pdbs",
+    separate_frames=False
+)
+
+gt_coords = load_multimodel_pdb_coords("animation_pdbs/ground_truth_trajectory.pdb")
+pred_coords = load_multimodel_pdb_coords("animation_pdbs/predicted_trajectory.pdb")
+
 fig = plt.figure()
 plt.style.use('dark_background')
 prota = fig.add_subplot(111, projection='3d')
@@ -424,13 +436,14 @@ ims = []
 
 alpha = 0.9
 start = time.time()
-
+rmsd = []
 for i in range(int(gtdlen)):
     s2 = time.time()
     gt = ground_truth_dynamics_pos[i]
     pred = pred_dynamics_pos[i]
     folding = prota.scatter(gt[:, 0], gt[:, 1], gt[:, 2], c='b', alpha=0.6)
     folding_pred = prota.scatter(pred[:, 0], pred[:, 1], pred[:, 2], c='r', alpha=0.3)
+    rmsd.append([gt[:, 0] - pred[:, 0], gt[:, 1] - pred[:, 1], gt[:, 2] - pred[:, 2]])
     ims.append([folding, folding_pred])
     e2 = time.time()
     sys.stdout.write("\rPlotting... %f" % round((e2 - s2), 2))
@@ -440,10 +453,8 @@ for i in range(int(gtdlen)):
 ani = animation.ArtistAnimation(fig, ims, interval=250, blit=True, repeat=True)
 end = time.time()
 print('\nPlotting Time :', round((end - start), 2), ' [s]')
-
 ani.save("proteinA-folding_testing.gif", dpi=600, writer=PillowWriter(fps=10))
 plt.show()
-
 model.cpu()
 del model
 gc.collect()
