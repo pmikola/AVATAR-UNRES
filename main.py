@@ -14,7 +14,8 @@ import matplotlib
 import numpy as np
 import torch
 from matplotlib import pyplot as plt, animation
-from matplotlib.animation import PillowWriter
+from matplotlib.animation import PillowWriter, FuncAnimation
+from scipy.ndimage import gaussian_filter
 from torch import nn, optim
 from AVATAR import AvatarUNRES
 from utils import switch_order, generate_volumetric_data, project3d_to_2d, create_2d_views, project_2d_to_3d, \
@@ -125,39 +126,50 @@ for i in range(len(meta_info[:])):
         m2.append(m1)
     meta_info[i] = m2
 
-pos = switch_order(pos)
+pos2 = switch_order(pos)
 vel = switch_order(vel)
 acc = switch_order(acc)
 force = switch_order(force)
 
 meta = torch.tensor(meta_info).reshape(1000, 9 * 32)
 coords = torch.tensor(pos)
+coords2 = torch.tensor(pos2)
 velocities = torch.tensor(vel)
 accelerations = torch.tensor(acc)
 forces = torch.tensor(force)
 
-scale = 1.
-offset = 0.
-outmap_min, _ = torch.min(coords, dim=1, keepdim=True)
-outmap_max, _ = torch.max(coords, dim=1, keepdim=True)
-coords = scale * (((coords - outmap_min) / (outmap_max - outmap_min)) + offset)
-outmap_min, _ = torch.min(velocities, dim=1, keepdim=True)
-outmap_max, _ = torch.max(velocities, dim=1, keepdim=True)
-velocities = scale * (((velocities - outmap_min) / (outmap_max - outmap_min)) + offset)
-outmap_min, _ = torch.min(accelerations, dim=1, keepdim=True)
-outmap_max, _ = torch.max(accelerations, dim=1, keepdim=True)
-accelerations = scale * (((accelerations - outmap_min) / (outmap_max - outmap_min)) + offset)
-outmap_min, _ = torch.min(forces, dim=1, keepdim=True)
-outmap_max, _ = torch.max(forces, dim=1, keepdim=True)
-forces = scale * (((forces - outmap_min) / (outmap_max - outmap_min)) + offset)
+# scale = 1.
+# offset = 0.
+# outmap_min, _ = torch.min(coords, dim=1, keepdim=True)
+# outmap_max, _ = torch.max(coords, dim=1, keepdim=True)
+# coords = scale * (((coords - outmap_min) / (outmap_max - outmap_min)) + offset)
+# outmap_min, _ = torch.min(velocities, dim=1, keepdim=True)
+# outmap_max, _ = torch.max(velocities, dim=1, keepdim=True)
+# velocities = scale * (((velocities - outmap_min) / (outmap_max - outmap_min)) + offset)
+# outmap_min, _ = torch.min(accelerations, dim=1, keepdim=True)
+# outmap_max, _ = torch.max(accelerations, dim=1, keepdim=True)
+# accelerations = scale * (((accelerations - outmap_min) / (outmap_max - outmap_min)) + offset)
+# outmap_min, _ = torch.min(forces, dim=1, keepdim=True)
+# outmap_max, _ = torch.max(forces, dim=1, keepdim=True)
+# forces = scale * (((forces - outmap_min) / (outmap_max - outmap_min)) + offset)
 
 # coords_spaceXtime, velocities_spaceXtime, accelerations_spaceXtime, forces_spaceXtime = generate_volumetric_data(
 # coords, velocities, accelerations, forces, grid_step, grid_padding, device)
 
-x = coords[:, 0::3]
-y = coords[:, 1::3]
-z = coords[:, 2::3]
+ca_number = 46
+x_ca = coords[:, 0:ca_number]
+y_ca = coords[:, ca_number:ca_number*2]
+z_ca = coords[:, ca_number*2:ca_number*3]
+x_cb = coords[:, ca_number*3:ca_number*4]
+y_cb = coords[:, ca_number*4:ca_number*5]
+z_cb = coords[:,ca_number*5:ca_number*6]
+
+x = torch.cat([x_ca,x_cb],dim=-1)
+y = torch.cat([y_ca,y_cb],dim=-1)
+z = torch.cat([z_ca,z_cb],dim=-1)
+print(x.shape, y.shape, z.shape,coords2.shape)
 coords3d = torch.tensor(np.stack((x, y, z), axis=-1), device=device)
+
 xv = velocities[:, 0::3]
 yv = velocities[:, 1::3]
 zv = velocities[:, 2::3]
@@ -329,7 +341,7 @@ pred_dynamics_vel = []
 pred_dynamics_acc = []
 pred_dynamics_force = []
 
-gtdlen = meta_test.shape[0] * 0.1
+gtdlen = int(meta_test.shape[0] * 0.1)
 
 model.batch_size = 1
 for param_group in optimizer.param_groups:
@@ -339,6 +351,7 @@ start = time.time()
 with torch.set_grad_enabled(False):
     for i in range(int(gtdlen)):
         # p, v, a, f, pz, vz, az, fz = model(meta_test[i], p, v, a, f)
+
 
         cprim, vprim, aprim, fprim = torch.unsqueeze(coords_test3d[i], dim=0), torch.unsqueeze(velocities_test3d[i],
                                                                                                dim=0), torch.unsqueeze(
@@ -395,7 +408,6 @@ pred_dynamics_pos = np.array(pred_dynamics_pos)
 pred_dynamics_vel = np.array(pred_dynamics_vel)
 pred_dynamics_acc = np.array(pred_dynamics_acc)
 pred_dynamics_force = np.array(pred_dynamics_force)
-
 ground_truth_dynamics_pos = []
 ground_truth_dynamics_vel = []
 ground_truth_dynamics_acc = []
@@ -420,7 +432,6 @@ process_pdb_and_generate_animations(
     output_folder="animation_pdbs",
     separate_frames=False
 )
-
 gt_coords = load_multimodel_pdb_coords("animation_pdbs/ground_truth_trajectory.pdb")
 pred_coords = load_multimodel_pdb_coords("animation_pdbs/predicted_trajectory.pdb")
 
@@ -432,29 +443,170 @@ prota.set_ylabel("y")
 prota.set_zlabel("z")
 marker_size = 1.5
 linewidth = 1
-ims = []
-
 alpha = 0.9
-start = time.time()
-rmsd = []
-for i in range(int(gtdlen)):
-    s2 = time.time()
-    gt = ground_truth_dynamics_pos[i]
-    pred = pred_dynamics_pos[i]
-    folding = prota.scatter(gt[:, 0], gt[:, 1], gt[:, 2], c='b', alpha=0.6)
-    folding_pred = prota.scatter(pred[:, 0], pred[:, 1], pred[:, 2], c='r', alpha=0.3)
-    rmsd.append([gt[:, 0] - pred[:, 0], gt[:, 1] - pred[:, 1], gt[:, 2] - pred[:, 2]])
-    ims.append([folding, folding_pred])
-    e2 = time.time()
-    sys.stdout.write("\rPlotting... %f" % round((e2 - s2), 2))
-    sys.stdout.write(' [s] | Loop : %i ' % i)
-    sys.stdout.flush()
 
-ani = animation.ArtistAnimation(fig, ims, interval=250, blit=True, repeat=True)
-end = time.time()
-print('\nPlotting Time :', round((end - start), 2), ' [s]')
-ani.save("proteinA-folding_testing.gif", dpi=600, writer=PillowWriter(fps=10))
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation, PillowWriter
+
+show_res_text = False
+show_res_markers = True
+
+def parse_pdb_ca_and_cb(pdb_file):
+    d = {}
+    order = []
+    with open(pdb_file, 'r') as f:
+        for line in f:
+            if line.startswith("ATOM"):
+                rn = line[22:26].strip()
+                key = rn
+                if key not in d:
+                    d[key] = {"CA": None, "CB": None}
+                    order.append(key)
+                name = line[13:15]
+                x = float(line[30:38])
+                y = float(line[38:46])
+                z = float(line[46:54])
+                if name == "CA":
+                    d[key]["CA"] = [x, y, z]
+                elif name == "CB":
+                    d[key]["CB"] = [x, y, z]
+    ca_coords = []
+    cb_coords = []
+    for k in order:
+        ca_coords.append(d[k]["CA"])
+        cb_coords.append(d[k]["CB"] if d[k]["CB"] else [np.nan, np.nan, np.nan])
+    ca_coords = np.array(ca_coords)
+    cb_coords = np.array(cb_coords)
+    edges_ca = []
+    for i in range(len(ca_coords)-1):
+        edges_ca.append((i, i+1))
+    edges_cb = []
+    for i in range(len(ca_coords)):
+        if not np.isnan(cb_coords[i]).any():
+            edges_cb.append((i, i))
+    return ca_coords, cb_coords, edges_ca, edges_cb, order
+
+pdb_filename = "proteinA/prota_nmr.pdb"
+ca_coords, cb_coords, edges_ca, edges_cb, residues_order = parse_pdb_ca_and_cb(pdb_filename)
+
+N = len(ca_coords)
+
+ground_truth_dynamics_ca = []
+ground_truth_dynamics_cb = []
+pred_dynamics_ca = []
+pred_dynamics_cb = []
+for i in range(gtdlen):
+    shift_gt = np.random.normal(scale=0.3, size=(N,3))*(i/gtdlen)
+    shift_pr = np.random.normal(scale=0.3, size=(N,3))*(i/gtdlen) + 1.0
+    gca = ca_coords.copy()+shift_gt
+    gcb = cb_coords.copy()+shift_gt
+    pca = ca_coords.copy()+shift_pr
+    pcb = cb_coords.copy()+shift_pr
+    ground_truth_dynamics_ca.append(gca)
+    ground_truth_dynamics_cb.append(gcb)
+    pred_dynamics_ca.append(pca)
+    pred_dynamics_cb.append(pcb)
+
+# all_gt = np.concatenate(ground_truth_dynamics_ca+ground_truth_dynamics_cb, axis=0)
+all_pr = np.concatenate(pred_dynamics_ca+pred_dynamics_cb, axis=0)
+all_gt = np.concatenate(ground_truth_dynamics_pos, axis=0)
+# all_pr = np.concatenate(pred_dynamics_pos, axis=0)
+
+all_data = np.vstack([all_gt, all_pr])
+x_min, x_max = np.nanmin(all_data[:,0]), np.nanmax(all_data[:,0])
+y_min, y_max = np.nanmin(all_data[:,1]), np.nanmax(all_data[:,1])
+z_min, z_max = np.nanmin(all_data[:,2]), np.nanmax(all_data[:,2])
+margin = 0.5
+
+fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+ax.set_xlim3d(x_min - margin, x_max + margin)
+ax.set_ylim3d(y_min - margin, y_max + margin)
+ax.set_zlim3d(z_min - margin, z_max + margin)
+ax.set_xlabel("X")
+ax.set_ylabel("Y")
+ax.set_zlabel("Z")
+
+gt_scatter_ca = ax.scatter([], [], [], c='b', alpha=0.6)
+pred_scatter_ca = ax.scatter([], [], [], c='r', alpha=0.3)
+gt_scatter_cb = ax.scatter([], [], [], marker='o', c='b', alpha=0.6)
+pred_scatter_cb = ax.scatter([], [], [], marker='o', c='r', alpha=0.3)
+
+gt_lines_ca = []
+pred_lines_ca = []
+for _ in edges_ca:
+    l1, = ax.plot([], [], [], c='b', alpha=0.4)
+    l2, = ax.plot([], [], [], c='r', alpha=0.4)
+    gt_lines_ca.append(l1)
+    pred_lines_ca.append(l2)
+
+gt_lines_cb = []
+pred_lines_cb = []
+for _ in edges_cb:
+    l1, = ax.plot([], [], [], c='b', alpha=0.6)
+    l2, = ax.plot([], [], [], c='r', alpha=0.6)
+    gt_lines_cb.append(l1)
+    pred_lines_cb.append(l2)
+
+res_texts = []
+if show_res_text:
+    for _ in residues_order:
+        txt = ax.text(0, 0, 0, "", color='white', fontsize=8)
+        res_texts.append(txt)
+
+def init():
+    gt_scatter_ca._offsets3d = ([], [], [])
+    pred_scatter_ca._offsets3d = ([], [], [])
+    gt_scatter_cb._offsets3d = ([], [], [])
+    pred_scatter_cb._offsets3d = ([], [], [])
+    for ln in gt_lines_ca+pred_lines_ca+gt_lines_cb+pred_lines_cb:
+        ln.set_data([], [])
+        ln.set_3d_properties([])
+    if show_res_text:
+        for t in res_texts:
+            t.set_position((0, 0))
+            t.set_3d_properties(0, zdir='z')
+            t.set_text("")
+    return [gt_scatter_ca, pred_scatter_ca, gt_scatter_cb, pred_scatter_cb]+gt_lines_ca+pred_lines_ca+gt_lines_cb+pred_lines_cb+(res_texts if show_res_text else [])
+
+
+def update(frame):
+    gca = ground_truth_dynamics_pos[frame,:46]
+    gcb = ground_truth_dynamics_pos[frame,46:]
+    pca = pred_dynamics_ca[frame]
+    pcb = pred_dynamics_cb[frame]
+    gt_scatter_ca._offsets3d = (gca[:,0], gca[:,1], gca[:,2])
+    pred_scatter_ca._offsets3d = (pca[:,0], pca[:,1], pca[:,2])
+    gt_scatter_cb._offsets3d = (gcb[:,0], gcb[:,1], gcb[:,2])
+    pred_scatter_cb._offsets3d = (pcb[:,0], pcb[:,1], pcb[:,2])
+    for i, (a,b) in enumerate(edges_ca):
+        gt_lines_ca[i].set_data([gca[a,0], gca[b,0]], [gca[a,1], gca[b,1]])
+        gt_lines_ca[i].set_3d_properties([gca[a,2], gca[b,2]])
+        pred_lines_ca[i].set_data([pca[a,0], pca[b,0]], [pca[a,1], pca[b,1]])
+        pred_lines_ca[i].set_3d_properties([pca[a,2], pca[b,2]])
+    for i, (a,b) in enumerate(edges_cb):
+        gt_lines_cb[i].set_data([gca[a,0], gcb[b,0]], [gca[a,1], gcb[b,1]])
+        gt_lines_cb[i].set_3d_properties([gca[a,2], gcb[b,2]])
+        pred_lines_cb[i].set_data([pca[a,0], pcb[b,0]], [pca[a,1], pcb[b,1]])
+        pred_lines_cb[i].set_3d_properties([pca[a,2], pcb[b,2]])
+    if show_res_text:
+        for i, t in enumerate(res_texts):
+            if not np.isnan(gcb[i]).any():
+                x = gcb[i,0]
+                y = gcb[i,1]
+                z = gcb[i,2]
+                t.set_position((x, y))
+                t.set_3d_properties(z, zdir='z')
+                t.set_text(residues_order[i])
+    return [gt_scatter_ca, pred_scatter_ca, gt_scatter_cb, pred_scatter_cb]+gt_lines_ca+pred_lines_ca+gt_lines_cb+pred_lines_cb+(res_texts if show_res_text else [])
+
+anim = FuncAnimation(fig, update, frames=gtdlen, init_func=init, interval=250, blit=False, repeat=True)
+anim.save("proteinA-folding_testing.gif", dpi=300, writer=PillowWriter(fps=10))
 plt.show()
+
+
+
 model.cpu()
 del model
 gc.collect()
