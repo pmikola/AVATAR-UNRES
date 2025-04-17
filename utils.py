@@ -577,3 +577,39 @@ def load_multimodel_pdb_coords(pdb_path):
     coords = np.stack(all_coords, axis=0)
     return coords
 
+
+def parse_pdb_ca_and_cb(pdb_file):
+    d = {}
+    order = []
+    with open(pdb_file, 'r') as f:
+        for line in f:
+            if line.startswith("ATOM"):
+                rn = line[22:26].strip()
+                key = rn
+                if key not in d:
+                    d[key] = {"CA": None, "CB": None}
+                    order.append(key)
+                name = line[13:15]
+                x = float(line[30:38])
+                y = float(line[38:46])
+                z = float(line[46:54])
+                if name == "CA":
+                    d[key]["CA"] = [x, y, z]
+                elif name == "CB":
+                    d[key]["CB"] = [x, y, z]
+    ca_coords = []
+    cb_coords = []
+    for k in order:
+        ca_coords.append(d[k]["CA"])
+        cb_coords.append(d[k]["CB"] if d[k]["CB"] else [np.nan, np.nan, np.nan])
+    ca_coords = np.array(ca_coords)
+    cb_coords = np.array(cb_coords)
+    edges_ca = []
+    for i in range(len(ca_coords)-1):
+        edges_ca.append((i, i+1))
+    edges_cb = []
+    for i in range(len(ca_coords)):
+        if not np.isnan(cb_coords[i]).any():
+            edges_cb.append((i, i))
+    return ca_coords, cb_coords, edges_ca, edges_cb, order
+
