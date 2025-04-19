@@ -245,8 +245,9 @@ train_cursor = val_cursor = 0                     #
 
 model_path     = './avatar_unres_best.pt'
 load_if_exists = False
+skip_training = True
 
-num_epochs       = 2000
+num_epochs       = 8000
 batch_size       = 16
 base_lr          = 1e-3
 max_grad_norm    = 1.0
@@ -261,6 +262,8 @@ criterion   = nn.MSELoss()
 best_val = float('inf')
 best_ckpt = None
 
+if skip_training:
+    load_if_exists = True
 
 if load_if_exists and os.path.isfile(model_path):
     ckpt = torch.load(model_path, map_location=device)
@@ -271,84 +274,85 @@ if load_if_exists and os.path.isfile(model_path):
 
 bloss, vloss = [], []
 start = time.time()
+if skip_training:
+    pass
+else:
+    # Note: ─────────────────────────── training loop ─────────────────────────
+    for epoch in range(num_epochs):
+        if train_cursor + batch_size > perm_train.numel():
+            perm_train, train_cursor = torch.randperm(train_pool.numel(), device=device), 0
+        idx  = perm_train[train_cursor : train_cursor+batch_size]
+        t    = train_pool[idx]; train_cursor += batch_size
 
-# Note: ─────────────────────────── training loop ─────────────────────────
-for epoch in range(num_epochs):
-    if train_cursor + batch_size > perm_train.numel():
-        perm_train, train_cursor = torch.randperm(train_pool.numel(), device=device), 0
-    idx  = perm_train[train_cursor : train_cursor+batch_size]
-    t    = train_pool[idx]; train_cursor += batch_size
+        # Note: ---------- data augmentation ----------------------------------
+        pos_in = pos_t[t] + torch.randn_like(pos_t[t]) * noise_cfg['pos']
+        vel_in = vel_t[t] + torch.randn_like(vel_t[t]) * noise_cfg['vel']
+        acc_in = acc_t[t] + torch.randn_like(acc_t[t]) * noise_cfg['acc']
 
-    # Note: ---------- data augmentation ----------------------------------
-    pos_in = pos_t[t] + torch.randn_like(pos_t[t]) * noise_cfg['pos']
-    vel_in = vel_t[t] + torch.randn_like(vel_t[t]) * noise_cfg['vel']
-    acc_in = acc_t[t] + torch.randn_like(acc_t[t]) * noise_cfg['acc']
+        # Attention: random sign‑flip (global mirror)
+        if torch.rand(1) < 0.5:
+            sign = (-1)**torch.randint(0,2,(1,),device=device)
+            pos_in, vel_in, acc_in = pos_in*sign, vel_in*sign, acc_in*sign
 
-    # Attention: random sign‑flip (global mirror)
-    if torch.rand(1) < 0.5:
-        sign = (-1)**torch.randint(0,2,(1,),device=device)
-        pos_in, vel_in, acc_in = pos_in*sign, vel_in*sign, acc_in*sign
+        model.train()
+        pr_pos, pr_vel, pr_acc = model(pos_in, vel_in, acc_in)
+        pred   = torch.cat([pr_pos, pr_vel, pr_acc], dim=1)
+        target = torch.cat([pos_t[t+1], vel_t[t+1], acc_t[t+1]], dim=1)
 
-    model.train()
-    pr_pos, pr_vel, pr_acc = model(pos_in, vel_in, acc_in)
-    pred   = torch.cat([pr_pos, pr_vel, pr_acc], dim=1)
-    target = torch.cat([pos_t[t+1], vel_t[t+1], acc_t[t+1]], dim=1)
+        loss = criterion(pred, target)
+        optimiser.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+        optimiser.step()
+        bloss.append(loss.item())
 
-    loss = criterion(pred, target)
-    optimiser.zero_grad()
-    loss.backward()
-    torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
-    optimiser.step()
-    bloss.append(loss.item())
+        # Note: --------------- validation ------------------------------------
+        if val_cursor + batch_size > perm_val.numel():
+            perm_val, val_cursor = torch.randperm(val_pool.numel(), device=device), 0
+        vidx  = perm_val[val_cursor : val_cursor+batch_size]
+        t_val = val_pool[vidx]; val_cursor += batch_size
 
-    # Note: --------------- validation ------------------------------------
-    if val_cursor + batch_size > perm_val.numel():
-        perm_val, val_cursor = torch.randperm(val_pool.numel(), device=device), 0
-    vidx  = perm_val[val_cursor : val_cursor+batch_size]
-    t_val = val_pool[vidx]; val_cursor += batch_size
+        model.eval()
+        with torch.no_grad():
+            pv_pos, pv_vel, pv_acc = model(pos_t[t_val], vel_t[t_val], acc_t[t_val])
+            pred_val   = torch.cat([pv_pos, pv_vel, pv_acc], dim=1)
+            target_val = torch.cat([pos_t[t_val+1], vel_t[t_val+1], acc_t[t_val+1]], dim=1)
+            v_loss = criterion(pred_val, target_val).item()
+            vloss.append(v_loss)
 
-    model.eval()
-    with torch.no_grad():
-        pv_pos, pv_vel, pv_acc = model(pos_t[t_val], vel_t[t_val], acc_t[t_val])
-        pred_val   = torch.cat([pv_pos, pv_vel, pv_acc], dim=1)
-        target_val = torch.cat([pos_t[t_val+1], vel_t[t_val+1], acc_t[t_val+1]], dim=1)
-        v_loss = criterion(pred_val, target_val).item()
-        vloss.append(v_loss)
+        # ---------- LR scheduler & checkpoint --------------------------
+        scheduler.step(v_loss)
 
-    # ---------- LR scheduler & checkpoint --------------------------
-    scheduler.step(v_loss)
+        if v_loss < best_val:
+            best_val = v_loss
+            best_ckpt = {
+                'state_dict': model.state_dict(),
+                'optim'    : optimiser.state_dict(),
+                'best_val' : best_val
+            }
+            torch.save(best_ckpt, model_path)
+            flag = ' ⭑ saved'
+        else:
+            flag = ''
 
-    if v_loss < best_val:
-        best_val = v_loss
-        best_ckpt = {
-            'state_dict': model.state_dict(),
-            'optim'    : optimiser.state_dict(),
-            'best_val' : best_val
-        }
-        torch.save(best_ckpt, model_path)
-        flag = ' ⭑ saved'
-    else:
-        flag = ''
+        if epoch % 50 == 0:
+            lr_now = optimiser.param_groups[0]['lr']
+            print(f'Epoch {epoch+1:4d}/{num_epochs} · '
+                  f'lr {lr_now:.2e} · '
+                  f'train L {loss.item():.3e} · val L {v_loss:.3e}{flag}')
 
-    if epoch % 50 == 0:
-        lr_now = optimiser.param_groups[0]['lr']
-        print(f'Epoch {epoch+1:4d}/{num_epochs} · '
-              f'lr {lr_now:.2e} · '
-              f'train L {loss.item():.3e} · val L {v_loss:.3e}{flag}')
-
-print(f'\n⌛ finished in {(time.time()-start)/60:.1f} min')
+    print(f'\n⌛ finished in {(time.time()-start)/60:.1f} min')
+    fig = plt.figure()
+    # plt.style.use('dark_background')
+    plt.plot(bloss, c='blue', label='train_loss')
+    plt.plot(vloss, c='orange', label='test_loss')
+    plt.legend()
+    plt.grid()
+    plt.show()
 
 if best_ckpt is not None:
     model.load_state_dict(best_ckpt['state_dict'])
 
-
-fig = plt.figure()
-# plt.style.use('dark_background')
-plt.plot(bloss, c='blue',label='train_loss')
-plt.plot(vloss, c='orange',label='test_loss')
-plt.legend()
-plt.grid()
-plt.show()
 
 plt.style.use('dark_background')
 gtdlen   = int(coords_test3d.shape[0] * 0.30)
@@ -442,12 +446,76 @@ def animate_compare(gt, pr, times, n_res=46, fps=1, slow=8,
                  writer=PillowWriter(fps=fps), dpi=300)
     plt.show()
 
-animate_compare(gt_frames, pred_frames, time_frames,
-                n_res=46, fps=2, slow=4, out='compare.mp4',
-                show_cb=True)
+# animate_compare(gt_frames, pred_frames, time_frames,
+#                 n_res=46, fps=2, slow=4, out='compare.mp4',
+#                 show_cb=True)
 
-model.cpu()
-del model
-gc.collect()
-torch.cuda.empty_cache()
+# compute per‑frame RMSD on test set
+model.eval()
+rmsd_pos, rmsd_vel, rmsd_acc = [], [], []
+with torch.no_grad():
+    # test frames are train_size … n_frames‑2 (so we can compare t → t+1)
+    for t in range(train_size, pos_t.shape[0] - 1):
+        pr_pos, pr_vel, pr_acc = model(
+            pos_t[t:t+1], vel_t[t:t+1], acc_t[t:t+1]
+        )
+        true_pos = pos_t[t+1]
+        true_vel = vel_t[t+1]
+        true_acc = acc_t[t+1]
+        diff_pos = pr_pos.squeeze(0) - true_pos
+        diff_vel = pr_vel.squeeze(0) - true_vel
+        diff_acc = pr_acc.squeeze(0) - true_acc
+        rmsd_pos.append(torch.sqrt((diff_pos**2).mean()).item())
+        rmsd_vel.append(torch.sqrt((diff_vel**2).mean()).item())
+        rmsd_acc.append(torch.sqrt((diff_acc**2).mean()).item())
 
+# plot
+# plt.figure()
+# # plt.plot(rmsd_pos, label='AVG Position')
+# # plt.plot(rmsd_vel, label='AVG Velocity')
+# plt.plot(rmsd_acc, label='AVG Acceleration')
+# plt.xlabel('Test frame index')
+# plt.ylabel('RMSD [U]')
+# plt.legend()
+# plt.grid(True)
+# plt.show()
+n_atoms = gt_frames[0].shape[0]
+half = n_atoms // 2
+
+def rmsd_matrices(gt, pr):
+    diff = pr[:, None, :] - gt[None, :, :]
+    return np.abs(diff[:, :, 0]), np.abs(diff[:, :, 1]), np.abs(diff[:, :, 2])
+
+mats_x, mats_y, mats_z = zip(*(rmsd_matrices(gt_frames[i], pred_frames[i]) for i in range(len(gt_frames))))
+
+# swap top and bottom halves
+mats_x = [np.vstack((m[half:], m[:half])) for m in mats_x]
+mats_y = [np.vstack((m[half:], m[:half])) for m in mats_y]
+mats_z = [np.vstack((m[half:], m[:half])) for m in mats_z]
+
+fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+vmax = max(np.max(m) for m in mats_x + mats_y + mats_z)
+im_x = axes[0].imshow(mats_x[0], vmin=0, vmax=vmax, origin='lower', cmap='inferno')
+axes[0].set_title('X RMSD')
+im_y = axes[1].imshow(mats_y[0], vmin=0, vmax=vmax, origin='lower', cmap='inferno')
+axes[1].set_title('Y RMSD')
+im_z = axes[2].imshow(mats_z[0], vmin=0, vmax=vmax, origin='lower', cmap='inferno')
+axes[2].set_title('Z RMSD')
+for ax in axes:
+    ax.set_xlabel('true atom index')
+    ax.set_ylabel('pred atom index')
+cbar = fig.colorbar(im_z, ax=axes.ravel().tolist(), shrink=0.6)
+cbar.set_label('Distance [Å]')
+
+def update(i):
+    im_x.set_data(mats_x[i])
+    im_y.set_data(mats_y[i])
+    im_z.set_data(mats_z[i])
+    fig.suptitle(f'Frame {i}')
+    return (im_x, im_y, im_z)
+
+ani = FuncAnimation(fig, update, frames=len(gt_frames), interval=200)
+plt.show()
+
+gif_path = Path('rmsd_xyz_heatmap_swapped.gif')
+ani.save(gif_path, writer=PillowWriter(fps=5))
