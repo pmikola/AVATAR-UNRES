@@ -1,25 +1,14 @@
-import os
 import gc
 import os
 import random
-import struct
 import sys
 import sysconfig
 import time
-
-import cv2
-from pyqtgraph.Qt import QtCore, QtGui
-import pyqtgraph.opengl as gl
 import matplotlib
 import numpy as np
 import torch
-from matplotlib import pyplot as plt, animation
-from matplotlib.animation import PillowWriter, FuncAnimation
-from scipy.ndimage import gaussian_filter
 from torch import nn, optim
 from AVATAR import AvatarUNRES
-from utils import switch_order, generate_volumetric_data, project3d_to_2d, create_2d_views, project_2d_to_3d, \
-    process_pdb_and_generate_animations, load_multimodel_pdb_coords, compute_rmsd, parse_pdb_ca_and_cb
 
 random.seed(2024)
 np.random.seed(2024)
@@ -45,101 +34,77 @@ else:
 from pathlib import Path
 import itertools, shutil, numpy as np, matplotlib.pyplot as plt, torch
 from matplotlib.animation import FuncAnimation, FFMpegWriter, PillowWriter
-from mpl_toolkits.mplot3d import Axes3D         # noqa: F401  (3‑D projection)
+from mpl_toolkits.mplot3d import Axes3D
 
-# ────────────────────────── constants ────────────────────────────────────────
-FS_PER_UNRES_UNIT = 48.89                      # 1 UNRES unit ≈ 48.89 fs
-
-# ────────────────────────── full‑trajectory loader ───────────────────────────
+FS_PER_UNRES_UNIT = 48.89
 
 def _grab_block(fh):
-    """Read float lines until the next tag (‘#…’) or EOF → (data, next_tag)."""
     data = []
     for line in fh:
         if line.lstrip().startswith('#'):
-            return data, line        # reached the next tag
+            return data, line
         data.extend(map(float, line.split()))
-    return data, ''                  # EOF
+    return data, ''                     # EOF
 
 
 def _skip_to_tag(fh, keyword):
-    """Read until a tag line that contains `keyword`; return that tag or ''. """
     for line in fh:
         if line.lstrip().startswith('#') and keyword in line:
             return line
-    return ''                        # EOF before tag
+    return ''                           # not found
 
 
 def _ensure_tag(fh, current_tag, keyword):
-    if (current_tag and current_tag.lstrip().startswith('#')
-            and keyword in current_tag):
+    if current_tag and current_tag.lstrip().startswith('#') and keyword in current_tag:
         return current_tag
     return _skip_to_tag(fh, keyword)
 
 
+def _fit_len(arr, L, fill=float('nan')):
+    if len(arr) < L:
+        return arr + [fill] * (L - len(arr))
+    if len(arr) > L:
+        return arr[:L]
+    return arr
+
+
 def load_trajectory_tensors(xfile: str):
-    times, pos, vel, acc, frc = [], [], [], [], []
+    times, frc = [], []
+    signal = [],[],[],[]
     n_atoms = None
-    with Path(xfile).open(encoding="utf-8") as fh:
-        tag = ''
-        while True:
-            # ─── header (numeric timestamp) ───
-            while not tag:
-                line = fh.readline()
-                if not line:                          # EOF
-                    return _to_tensors(times, pos, vel, acc, frc)
-                if not line.lstrip().startswith('#'):
-                    tag = line
+    var_names = ['#coordinates','#velocities','#accelerations','#potential forces']
+    for k in range(0, 4):
+        with Path(xfile).open(encoding="utf-8") as fh:
+            tag = ''
+            t_unres = 0
+            while True:
+                tag = _skip_to_tag(fh, var_names[k])
+                if not tag:
                     break
-            header, tag = tag, ''                     # consume header
-            try:
-                t_unres = float(header.split()[0])
-            except ValueError:
-                continue                              # malformed -> skip
-            time_fs = t_unres * FS_PER_UNRES_UNIT
+                x, tag = _grab_block(fh)
+                if t_unres == 999:
+                    print(x)
+                cur_atoms = len(x) // 3
+                if n_atoms is None:
+                    n_atoms = cur_atoms
+                x = _fit_len(x, n_atoms * 3)
+                signal[k].append(x)
+                if k == 0:
+                    times.append(t_unres * FS_PER_UNRES_UNIT)
+                t_unres+=1
+    pos,vel,acc,frc = signal[0], signal[1], signal[2], signal[3]
+    if not pos:
+        raise RuntimeError("no coordinate blocks found in the file")
+    n_frames = len(pos)
 
-            # ─── coordinates ───
-            tag = _skip_to_tag(fh, '#coordinates')
-            if not tag: break
-            coords, tag = _grab_block(fh)
-            if len(coords) % 3: continue              # malformed
-            if n_atoms is None:
-                n_atoms = len(coords) // 3
-            if len(coords) != n_atoms * 3: continue   # inconsistent -> skip
+    def _mk(arr):
+        return torch.tensor(np.asarray(arr, dtype=np.float32).reshape(n_frames, n_atoms, 3))
 
-            # ─── velocities ───
-            tag = _ensure_tag(fh, tag, '#velocities')
-            vels, tag = _grab_block(fh)
-            if len(vels) != n_atoms * 3: continue
-
-            # ─── accelerations ───
-            tag = _ensure_tag(fh, tag, '#accelerations')
-            accs, tag = _grab_block(fh)
-            if len(accs) != n_atoms * 3: continue
-
-            # ─── potential / forces ───
-            tag = _ensure_tag(fh, tag, '#potential')
-            if 'forces' not in tag.split():           # forces not inline
-                tag = _skip_to_tag(fh, 'forces')
-            forces, tag = _grab_block(fh)
-            # forces may be missing or shorter – pad with nan
-            if len(forces) < n_atoms * 3:
-                forces.extend([float('nan')] * (n_atoms * 3 - len(forces)))
-            elif len(forces) > n_atoms * 3:
-                forces = forces[:n_atoms * 3]
-
-            # ---------- good frame: commit ----------
-            times.append(time_fs)
-            pos .append(coords)
-            vel .append(vels)
-            acc .append(accs)
-            frc .append(forces)
-
-    return _to_tensors(times, pos, vel, acc, frc)
+    return (torch.tensor(np.asarray(times, dtype=np.float32)),
+            _mk(pos), _mk(vel), _mk(acc), _mk(frc))
 
 
 def _to_tensors(times, pos, vel, acc, frc):
-    """Python lists → torch tensors with shape (N_frames, N_atoms, 3)."""
     if not pos:
         raise RuntimeError("no complete frames found in the file")
 
@@ -152,22 +117,21 @@ def _to_tensors(times, pos, vel, acc, frc):
     return (torch.tensor(np.asarray(times, dtype=np.float32)),
             _mk(pos), _mk(vel), _mk(acc), _mk(frc))
 
-# ────────────────────────── helpers for animation ───────────────────────────
 def read_frames(xfile):
     with Path(xfile).open(encoding="utf-8") as fh:
         while True:
-            for header in fh:                           # find a numeric header
+            for header in fh:
                 if not header or not header.lstrip().startswith('#'):
                     break
             else:
                 return
             t_unres = float(header.split()[0])
             time_fs = t_unres * FS_PER_UNRES_UNIT
-            for line in fh:                             # must be '#coordinates'
+            for line in fh:
                 if not line or line.strip() == "#coordinates":
                     break
             coords = []
-            for line in fh:                             # until next '#'
+            for line in fh:
                 if line.lstrip().startswith('#'):
                     break
                 coords.extend(float(tok) for tok in line.split())
@@ -241,10 +205,8 @@ def animate_trajectory(xfile, *, n_res=46, stride=10,
         print("Saved movie to:", Path(outfile).resolve())
     return ani
 
-
 X_FILE = r"proteinA/prota_MD_NVE-noxdr_MD000.x"
 
-# ⇣⇣⇣ NEW – grab everything as tensors for ML ⇣⇣⇣
 times_t, pos_t, vel_t, acc_t, forces_t = load_trajectory_tensors(X_FILE)
 times_t, pos_t, vel_t, acc_t, forces_t = times_t.to(device), pos_t.to(device), vel_t.to(device), acc_t.to(device), forces_t.to(device)
 print("Loaded tensors shapes:",
@@ -254,6 +216,13 @@ print("Loaded tensors shapes:",
       "\n  acc    :", acc_t.shape,
       "\n  forces :", forces_t.shape)
 
+pos_centroids = pos_t.mean(dim=1, keepdim=True)
+vel_centroids = vel_t.mean(dim=1, keepdim=True)
+acc_centroids = acc_t.mean(dim=1, keepdim=True)
+
+pos_t = pos_t - pos_centroids
+vel_t = vel_t - vel_centroids
+acc_t = acc_t - acc_centroids
 # plt.style.use('dark_background')
 # anim = animate_trajectory(X_FILE, stride=20, fps=5,slow=100, outfile="proteinA_whole_dynamics.mp4")
 # plt.show()
@@ -277,15 +246,16 @@ train_cursor = val_cursor = 0                     #
 model_path     = './avatar_unres_best.pt'
 load_if_exists = False
 
-num_epochs       = 5_000
-batch_size       = 32
-base_lr          = 1e-4
+num_epochs       = 2000
+batch_size       = 16
+base_lr          = 1e-3
 max_grad_norm    = 1.0
-noise_cfg = dict(pos = 0.05,vel = 0.05,acc = 0.05)
+noise_cfg = dict(pos = 0.025,vel = 0.025,acc = 0.025)
 
 model      = AvatarUNRES(pos_t, vel_t, acc_t).to(device)
-optimiser   = optim.Adam(model.parameters(), lr=base_lr, weight_decay=1e-3)
-scheduler   = optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode='min', factor=0.5, patience=200,min_lr=1e-6, verbose=True)
+optimiser   = optim.Adam(model.parameters(), lr=base_lr, weight_decay=1e-4,amsgrad=True)
+scheduler   = optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode='min', factor=0.5, patience=250,min_lr=1e-6)
+print('LR set:',scheduler.get_last_lr())
 criterion   = nn.MSELoss()
 
 best_val = float('inf')
@@ -304,8 +274,6 @@ start = time.time()
 
 # Note: ─────────────────────────── training loop ─────────────────────────
 for epoch in range(num_epochs):
-
-    # draw training batch indices
     if train_cursor + batch_size > perm_train.numel():
         perm_train, train_cursor = torch.randperm(train_pool.numel(), device=device), 0
     idx  = perm_train[train_cursor : train_cursor+batch_size]
@@ -316,7 +284,7 @@ for epoch in range(num_epochs):
     vel_in = vel_t[t] + torch.randn_like(vel_t[t]) * noise_cfg['vel']
     acc_in = acc_t[t] + torch.randn_like(acc_t[t]) * noise_cfg['acc']
 
-    # Attention: optional random sign‑flip (global mirror)
+    # Attention: random sign‑flip (global mirror)
     if torch.rand(1) < 0.5:
         sign = (-1)**torch.randint(0,2,(1,),device=device)
         pos_in, vel_in, acc_in = pos_in*sign, vel_in*sign, acc_in*sign
@@ -376,13 +344,14 @@ if best_ckpt is not None:
 
 fig = plt.figure()
 # plt.style.use('dark_background')
-plt.plot(bloss, c='blue')
-plt.plot(vloss, c='orange')
+plt.plot(bloss, c='blue',label='train_loss')
+plt.plot(vloss, c='orange',label='test_loss')
+plt.legend()
 plt.grid()
 plt.show()
 
 plt.style.use('dark_background')
-gtdlen   = int(coords_test3d.shape[0] * 0.10)
+gtdlen   = int(coords_test3d.shape[0] * 0.30)
 model.eval()
 pred_frames = []
 with torch.no_grad():
@@ -398,7 +367,7 @@ def _pair_idx(ca, sc):
         return np.array([], dtype=int)
     return np.linalg.norm(sc[:, None] - ca[None], axis=2).argmin(1)
 
-def animate_compare(gt, pr, times, n_res=46, fps=8, slow=8,
+def animate_compare(gt, pr, times, n_res=46, fps=1, slow=8,
                     out='compare.mp4', show_cb=True):
     fig = plt.figure(figsize=(6, 5))
     ax  = fig.add_subplot(111, projection='3d')
@@ -460,7 +429,7 @@ def animate_compare(gt, pr, times, n_res=46, fps=8, slow=8,
                            [ca_p[j, 1], sc_p[k, 1]])
                 l.set_3d_properties([ca_p[j, 2], sc_p[k, 2]])
 
-        ax.set_title(f't = {times[i] / 1000:.1f} ps')
+        ax.set_title(f't = {-times[i] / 1000:.1f} ps')
         return (lg, lp, sg, sp, *lines_g, *lines_p) if show_cb else (lg, lp, sg, sp)
 
     ani = FuncAnimation(fig, up, frames=len(gt),
@@ -474,7 +443,7 @@ def animate_compare(gt, pr, times, n_res=46, fps=8, slow=8,
     plt.show()
 
 animate_compare(gt_frames, pred_frames, time_frames,
-                n_res=46, fps=8, slow=8, out='compare.mp4',
+                n_res=46, fps=2, slow=4, out='compare.mp4',
                 show_cb=True)
 
 model.cpu()
