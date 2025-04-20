@@ -9,6 +9,7 @@ import numpy as np
 import torch
 from torch import nn, optim
 from AVATAR import AvatarUNRES
+import torch.nn.functional as F
 
 random.seed(2024)
 np.random.seed(2024)
@@ -245,17 +246,17 @@ train_cursor = val_cursor = 0                     #
 
 model_path     = './avatar_unres_best.pt'
 load_if_exists = False
-skip_training = True
+skip_training = False
 
-num_epochs       = 8000
+num_epochs       = 5000
 batch_size       = 16
 base_lr          = 1e-3
-max_grad_norm    = 1.0
+max_grad_norm    = 2.0
 noise_cfg = dict(pos = 0.025,vel = 0.025,acc = 0.025)
 
 model      = AvatarUNRES(pos_t, vel_t, acc_t).to(device)
-optimiser   = optim.Adam(model.parameters(), lr=base_lr, weight_decay=1e-4,amsgrad=True)
-scheduler   = optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode='min', factor=0.5, patience=250,min_lr=1e-6)
+optimiser   = optim.Adam(model.parameters(), lr=base_lr, weight_decay=1e-5,amsgrad=True)
+scheduler   = optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode='min', factor=0.7, patience=200,min_lr=1e-6)
 print('LR set:',scheduler.get_last_lr())
 criterion   = nn.MSELoss()
 
@@ -281,25 +282,88 @@ else:
     for epoch in range(num_epochs):
         if train_cursor + batch_size > perm_train.numel():
             perm_train, train_cursor = torch.randperm(train_pool.numel(), device=device), 0
-        idx  = perm_train[train_cursor : train_cursor+batch_size]
-        t    = train_pool[idx]; train_cursor += batch_size
+        idx = perm_train[train_cursor:train_cursor + batch_size]
+        t = train_pool[idx];
+        train_cursor += batch_size
 
-        # Note: ---------- data augmentation ----------------------------------
+        # ---- data augmentation ----
         pos_in = pos_t[t] + torch.randn_like(pos_t[t]) * noise_cfg['pos']
         vel_in = vel_t[t] + torch.randn_like(vel_t[t]) * noise_cfg['vel']
         acc_in = acc_t[t] + torch.randn_like(acc_t[t]) * noise_cfg['acc']
 
-        # Attention: random sign‑flip (global mirror)
+        # 1. random global rotation
         if torch.rand(1) < 0.5:
-            sign = (-1)**torch.randint(0,2,(1,),device=device)
-            pos_in, vel_in, acc_in = pos_in*sign, vel_in*sign, acc_in*sign
+            A = torch.randn(3, 3, device=device)
+            Q, _ = torch.linalg.qr(A, mode='reduced')
+            pos_in = pos_in @ Q.T
+            vel_in = vel_in @ Q.T
+            acc_in = acc_in @ Q.T
+
+        # 2. random translation
+        if torch.rand(1) < 0.5:
+            tvec = torch.randn(1, 1, 3, device=device) * 0.1
+            pos_in = pos_in + tvec
+            vel_in = vel_in + tvec
+            acc_in = acc_in + tvec
+
+        # 3. random isotropic scaling
+        if torch.rand(1) < 0.5:
+            scale = torch.rand(1, 1, 1, device=device) * 0.2 + 0.9
+            pos_in = pos_in * scale
+            vel_in = vel_in * scale
+            acc_in = acc_in * scale
+
+        # 4. random atom dropout
+        if torch.rand(1) < 0.3:
+            mask = torch.rand(pos_in.shape[1], device=device) < 0.1
+            pos_in[:, mask] = 0
+            vel_in[:, mask] = 0
+            acc_in[:, mask] = 0
+
+        # 5. random sign‑flip (mirror)
+        if torch.rand(1) < 0.5:
+            sign = (-1) ** torch.randint(0, 2, (1,), device=device)
+            pos_in, vel_in, acc_in = pos_in * sign, vel_in * sign, acc_in * sign
 
         model.train()
         pr_pos, pr_vel, pr_acc = model(pos_in, vel_in, acc_in)
-        pred   = torch.cat([pr_pos, pr_vel, pr_acc], dim=1)
-        target = torch.cat([pos_t[t+1], vel_t[t+1], acc_t[t+1]], dim=1)
+        pred = torch.cat([pr_pos, pr_vel, pr_acc], dim=1)
+        target = torch.cat([pos_t[t + 1], vel_t[t + 1], acc_t[t + 1]], dim=1)
 
-        loss = criterion(pred, target)
+        # main next‐step MSE
+        loss_main = criterion(pred, target)
+
+        # 1) pairwise x–y–z distance matrix loss
+        true_pos = pos_t[t + 1]  # (B, N, 3)
+        D_gt = torch.cdist(true_pos, true_pos)  # (B, N, N)
+        D_pr = torch.cdist(pr_pos, pr_pos)
+        loss_dist = F.mse_loss(D_pr, D_gt)
+        loss_dist_L1 = (D_pr - D_gt).abs().mean()
+
+        # 2) centroid consistency loss
+        cg = true_pos.mean(dim=1, keepdim=True)  # (B,1,3)
+        cp = pr_pos.mean(dim=1, keepdim=True)
+        loss_cent = F.mse_loss(cp, cg)
+
+        # 3) local bond‐angle loss on Cαs (first n_res atoms)
+        n_res = 46
+        ca_gt = true_pos[:, :n_res]
+        ca_pr = pr_pos[:, :n_res]
+        v1_gt = ca_gt[:, :-2] - ca_gt[:, 1:-1]
+        v2_gt = ca_gt[:, 2:] - ca_gt[:, 1:-1]
+        v1_pr = ca_pr[:, :-2] - ca_pr[:, 1:-1]
+        v2_pr = ca_pr[:, 2:] - ca_pr[:, 1:-1]
+        cos_gt = F.cosine_similarity(v1_gt, v2_gt, dim=-1)
+        cos_pr = F.cosine_similarity(v1_pr, v2_pr, dim=-1)
+        loss_angle = F.mse_loss(cos_pr, cos_gt)
+
+        # total loss
+        loss = loss_main \
+               + 0.3 * loss_dist \
+               + 0.3 * loss_cent \
+               + 0.3 * loss_angle\
+               + 0.3 * loss_dist_L1
+
         optimiser.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
@@ -315,9 +379,44 @@ else:
         model.eval()
         with torch.no_grad():
             pv_pos, pv_vel, pv_acc = model(pos_t[t_val], vel_t[t_val], acc_t[t_val])
-            pred_val   = torch.cat([pv_pos, pv_vel, pv_acc], dim=1)
-            target_val = torch.cat([pos_t[t_val+1], vel_t[t_val+1], acc_t[t_val+1]], dim=1)
-            v_loss = criterion(pred_val, target_val).item()
+            pred_val = torch.cat([pv_pos, pv_vel, pv_acc], dim=1)
+            target_val = torch.cat([pos_t[t_val + 1], vel_t[t_val + 1], acc_t[t_val + 1]], dim=1)
+
+            # 1) main next‐step MSE
+            loss_main_v = criterion(pred_val, target_val)
+
+            # 2) pairwise distance matrix loss
+            tp = pos_t[t_val + 1]  # (B, N, 3)
+            D_gt_v = torch.cdist(tp, tp)
+            D_pr_v = torch.cdist(pv_pos, pv_pos)
+            loss_dist_v = F.mse_loss(D_pr_v, D_gt_v)
+            loss_dist_L1_v = (D_pr_v - D_gt_v).abs().mean()
+
+            # 3) centroid consistency loss
+            cent_gt_v = tp.mean(dim=1, keepdim=True)
+            cent_pr_v = pv_pos.mean(dim=1, keepdim=True)
+            loss_cent_v = F.mse_loss(cent_pr_v, cent_gt_v)
+
+            # 4) local bond‑angle loss on Cαs
+            n_res = 46
+            ca_gt_v = tp[:, :n_res]
+            ca_pr_v = pv_pos[:, :n_res]
+            v1_gt_v = ca_gt_v[:, :-2] - ca_gt_v[:, 1:-1]
+            v2_gt_v = ca_gt_v[:, 2:] - ca_gt_v[:, 1:-1]
+            v1_pr_v = ca_pr_v[:, :-2] - ca_pr_v[:, 1:-1]
+            v2_pr_v = ca_pr_v[:, 2:] - ca_pr_v[:, 1:-1]
+            cos_gt_v = F.cosine_similarity(v1_gt_v, v2_gt_v, dim=-1)
+            cos_pr_v = F.cosine_similarity(v1_pr_v, v2_pr_v, dim=-1)
+            loss_angle_v = F.mse_loss(cos_pr_v, cos_gt_v)
+
+            # total validation loss
+            v_loss = (
+                    loss_main_v
+                    + 0.3 * loss_dist_v
+                    + 0.3 * loss_cent_v
+                    + 0.3 * loss_angle_v
+                    + 0.3 * loss_dist_L1_v
+            ).item()
             vloss.append(v_loss)
 
         # ---------- LR scheduler & checkpoint --------------------------
@@ -479,43 +578,74 @@ with torch.no_grad():
 # plt.legend()
 # plt.grid(True)
 # plt.show()
-n_atoms = gt_frames[0].shape[0]
-half = n_atoms // 2
+n_frames, n_atoms, _ = gt_frames.shape
 
-def rmsd_matrices(gt, pr):
-    diff = pr[:, None, :] - gt[None, :, :]
-    return np.abs(diff[:, :, 0]), np.abs(diff[:, :, 1]), np.abs(diff[:, :, 2])
+# allocate error arrays
+err_x = np.empty((n_frames, n_atoms, n_atoms), dtype=np.float32)
+err_y = np.empty_like(err_x)
+err_z = np.empty_like(err_x)
 
-mats_x, mats_y, mats_z = zip(*(rmsd_matrices(gt_frames[i], pred_frames[i]) for i in range(len(gt_frames))))
+for f in range(n_frames):
+    gt = gt_frames[f]    # (92,3)
+    pr = pred_frames[f]  # (92,3)
 
-# swap top and bottom halves
-mats_x = [np.vstack((m[half:], m[:half])) for m in mats_x]
-mats_y = [np.vstack((m[half:], m[:half])) for m in mats_y]
-mats_z = [np.vstack((m[half:], m[:half])) for m in mats_z]
+    # component vectors
+    gx, gy, gz = gt[:,0], gt[:,1], gt[:,2]
+    px, py, pz = pr[:,0], pr[:,1], pr[:,2]
 
+    # full pairwise differences
+    dx_gt = gx[None,:] - gx[:,None]   # (92,92) : true_j - true_i
+    dx_pr = px[None,:] - px[:,None]   # (92,92)
+
+    dy_gt = gy[None,:] - gy[:,None]
+    dy_pr = py[None,:] - py[:,None]
+
+    dz_gt = gz[None,:] - gz[:,None]
+    dz_pr = pz[None,:] - pz[:,None]
+
+    # error = pred_diff minus true_diff
+    err_x[f] = dx_pr - dx_gt
+    err_y[f] = dy_pr - dy_gt
+    err_z[f] = dz_pr - dz_gt
+
+# symmetric color limit
+lim = max(np.abs(err_x).max(),
+          np.abs(err_y).max(),
+          np.abs(err_z).max())
+
+# setup plotting
 fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-vmax = max(np.max(m) for m in mats_x + mats_y + mats_z)
-im_x = axes[0].imshow(mats_x[0], vmin=0, vmax=vmax, origin='lower', cmap='inferno')
-axes[0].set_title('X RMSD')
-im_y = axes[1].imshow(mats_y[0], vmin=0, vmax=vmax, origin='lower', cmap='inferno')
-axes[1].set_title('Y RMSD')
-im_z = axes[2].imshow(mats_z[0], vmin=0, vmax=vmax, origin='lower', cmap='inferno')
-axes[2].set_title('Z RMSD')
-for ax in axes:
-    ax.set_xlabel('true atom index')
-    ax.set_ylabel('pred atom index')
-cbar = fig.colorbar(im_z, ax=axes.ravel().tolist(), shrink=0.6)
-cbar.set_label('Distance [Å]')
+fig.subplots_adjust(wspace=0.4)
+titles = ['ΔX',
+          'ΔY',
+          'ΔZ']
+err_mats = [err_x, err_y, err_z]
+ims = []
 
-def update(i):
-    im_x.set_data(mats_x[i])
-    im_y.set_data(mats_y[i])
-    im_z.set_data(mats_z[i])
-    fig.suptitle(f'Frame {i}')
-    return (im_x, im_y, im_z)
+for ax, mat, title in zip(axes, err_mats, titles):
+    im = ax.imshow(mat[0],
+                   vmin=-lim, vmax=lim,
+                   cmap='seismic', origin='lower',
+                   aspect='equal')
+    ax.set_title(title)
+    ax.set_xlabel('Pred atom index (i)')
+    ax.set_ylabel('True atom index (j)')
+    ax.set_xticks(np.arange(0, n_atoms, 10))
+    ax.set_yticks(np.arange(0, n_atoms, 10))
+    ims.append(im)
 
-ani = FuncAnimation(fig, update, frames=len(gt_frames), interval=200)
+cbar = fig.colorbar(ims[-1], ax=axes, shrink=0.8)
+cbar.set_label('Error [Å]')
+
+def update(frame):
+    for im, mat in zip(ims, err_mats):
+        im.set_data(mat[frame])
+    fig.suptitle(f'Frame {frame}')
+    return ims
+
+ani = FuncAnimation(fig, update,
+                    frames=n_frames, interval=200, blit=False)
 plt.show()
 
-gif_path = Path('rmsd_xyz_heatmap_swapped.gif')
-ani.save(gif_path, writer=PillowWriter(fps=5))
+ani.save('axis_component_errors_pred_vs_true_full92.gif',
+         writer=PillowWriter(fps=5), dpi=250)
