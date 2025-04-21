@@ -255,6 +255,8 @@ max_grad_norm    = 2.0
 noise_cfg = dict(pos = 0.025,vel = 0.025,acc = 0.025)
 
 model      = AvatarUNRES(pos_t, vel_t, acc_t).to(device)
+pytorch_total_params = sum(p.numel() for p in model.parameters())
+print('Model No. Params:', pytorch_total_params)
 optimiser   = optim.Adam(model.parameters(), lr=base_lr, weight_decay=1e-5,amsgrad=True)
 scheduler   = optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode='min', factor=0.7, patience=200,min_lr=1e-6)
 print('LR set:',scheduler.get_last_lr())
@@ -545,9 +547,9 @@ def animate_compare(gt, pr, times, n_res=46, fps=1, slow=8,
                  writer=PillowWriter(fps=fps), dpi=300)
     plt.show()
 
-# animate_compare(gt_frames, pred_frames, time_frames,
-#                 n_res=46, fps=2, slow=4, out='compare.mp4',
-#                 show_cb=True)
+animate_compare(gt_frames, pred_frames, time_frames,
+                n_res=46, fps=2, slow=4, out='compare.mp4',
+                show_cb=True)
 
 # compute per‑frame RMSD on test set
 model.eval()
