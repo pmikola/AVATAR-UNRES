@@ -248,7 +248,7 @@ model_path     = './avatar_unres_best.pt'
 load_if_exists = False
 skip_training = False
 
-num_epochs       = 5000
+num_epochs       = 2000
 batch_size       = 16
 base_lr          = 1e-3
 max_grad_norm    = 2.0
@@ -258,7 +258,7 @@ model      = AvatarUNRES(pos_t, vel_t, acc_t).to(device)
 pytorch_total_params = sum(p.numel() for p in model.parameters())
 print('Model No. Params:', pytorch_total_params)
 optimiser   = optim.Adam(model.parameters(), lr=base_lr, weight_decay=1e-5,amsgrad=True)
-scheduler   = optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode='min', factor=0.7, patience=200,min_lr=1e-6)
+scheduler   = optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode='min', factor=0.8, patience=200,min_lr=1e-6)
 print('LR set:',scheduler.get_last_lr())
 criterion   = nn.MSELoss()
 
@@ -276,6 +276,7 @@ if load_if_exists and os.path.isfile(model_path):
     print(f'✓ loaded checkpoint  (val loss {best_val:.4e})')
 
 bloss, vloss = [], []
+w_loss = 0.5
 start = time.time()
 if skip_training:
     pass
@@ -332,22 +333,22 @@ else:
         pred = torch.cat([pr_pos, pr_vel, pr_acc], dim=1)
         target = torch.cat([pos_t[t + 1], vel_t[t + 1], acc_t[t + 1]], dim=1)
 
-        # main next‐step MSE
+        # 1) main next‐step MSE
         loss_main = criterion(pred, target)
 
-        # 1) pairwise x–y–z distance matrix loss
+        # 2) pairwise x–y–z distance matrix loss
         true_pos = pos_t[t + 1]  # (B, N, 3)
         D_gt = torch.cdist(true_pos, true_pos)  # (B, N, N)
         D_pr = torch.cdist(pr_pos, pr_pos)
         loss_dist = F.mse_loss(D_pr, D_gt)
         loss_dist_L1 = (D_pr - D_gt).abs().mean()
 
-        # 2) centroid consistency loss
+        # 3) centroid consistency loss
         cg = true_pos.mean(dim=1, keepdim=True)  # (B,1,3)
         cp = pr_pos.mean(dim=1, keepdim=True)
         loss_cent = F.mse_loss(cp, cg)
 
-        # 3) local bond‐angle loss on Cαs (first n_res atoms)
+        # 4) local bond‐angle loss on Cαs (first n_res atoms)
         n_res = 46
         ca_gt = true_pos[:, :n_res]
         ca_pr = pr_pos[:, :n_res]
@@ -359,12 +360,21 @@ else:
         cos_pr = F.cosine_similarity(v1_pr, v2_pr, dim=-1)
         loss_angle = F.mse_loss(cos_pr, cos_gt)
 
+        # 5) worst-atom RMSD penalty
+        true_pos = pos_t[t + 1]  # (B, N, 3)
+        diff_pos = pr_pos - true_pos  # (B, N, 3)
+        # per‐atom RMSD over x,y,z
+        rmsd_per_atom = torch.sqrt((diff_pos ** 2).mean(dim=2))  # (B, N)
+        # max‐atom RMSD, then mean over batch
+        loss_max_rmsd = rmsd_per_atom.max(dim=1)[0].mean()
+
         # total loss
         loss = loss_main \
-               + 0.3 * loss_dist \
-               + 0.3 * loss_cent \
-               + 0.3 * loss_angle\
-               + 0.3 * loss_dist_L1
+               + w_loss * loss_dist \
+               + w_loss * loss_cent \
+               + w_loss * loss_angle\
+               + w_loss * loss_dist_L1 \
+               + w_loss *loss_max_rmsd
 
         optimiser.zero_grad()
         loss.backward()
@@ -388,7 +398,7 @@ else:
             loss_main_v = criterion(pred_val, target_val)
 
             # 2) pairwise distance matrix loss
-            tp = pos_t[t_val + 1]  # (B, N, 3)
+            tp = pos_t[t_val + 1]
             D_gt_v = torch.cdist(tp, tp)
             D_pr_v = torch.cdist(pv_pos, pv_pos)
             loss_dist_v = F.mse_loss(D_pr_v, D_gt_v)
@@ -411,13 +421,22 @@ else:
             cos_pr_v = F.cosine_similarity(v1_pr_v, v2_pr_v, dim=-1)
             loss_angle_v = F.mse_loss(cos_pr_v, cos_gt_v)
 
+            # 5) worst-atom RMSD penalty
+            true_pos = pos_t[t + 1]  # (B, N, 3)
+            diff_pos = pr_pos - true_pos  # (B, N, 3)
+            # per‐atom RMSD over x,y,z
+            rmsd_per_atom = torch.sqrt((diff_pos ** 2).mean(dim=2))  # (B, N)
+            # max‐atom RMSD, then mean over batch
+            loss_max_rmsd = rmsd_per_atom.max(dim=1)[0].mean()
+
             # total validation loss
             v_loss = (
                     loss_main_v
-                    + 0.3 * loss_dist_v
-                    + 0.3 * loss_cent_v
-                    + 0.3 * loss_angle_v
-                    + 0.3 * loss_dist_L1_v
+                    + w_loss * loss_dist_v
+                    + w_loss * loss_cent_v
+                    + w_loss * loss_angle_v
+                    + w_loss * loss_dist_L1_v
+                    + w_loss * loss_max_rmsd
             ).item()
             vloss.append(v_loss)
 
@@ -534,7 +553,7 @@ def animate_compare(gt, pr, times, n_res=46, fps=1, slow=8,
                            [ca_p[j, 1], sc_p[k, 1]])
                 l.set_3d_properties([ca_p[j, 2], sc_p[k, 2]])
 
-        ax.set_title(f't = {-times[i] / 1000:.1f} ps')
+        ax.set_title(f't = {times[i] / 1000:.2f} ps')
         return (lg, lp, sg, sp, *lines_g, *lines_p) if show_cb else (lg, lp, sg, sp)
 
     ani = FuncAnimation(fig, up, frames=len(gt),
@@ -588,29 +607,25 @@ err_y = np.empty_like(err_x)
 err_z = np.empty_like(err_x)
 
 for f in range(n_frames):
-    gt = gt_frames[f]    # (92,3)
-    pr = pred_frames[f]  # (92,3)
+    gt = gt_frames[f]
+    pr = pred_frames[f]
 
-    # component vectors
     gx, gy, gz = gt[:,0], gt[:,1], gt[:,2]
     px, py, pz = pr[:,0], pr[:,1], pr[:,2]
 
-    # full pairwise differences
-    dx_gt = gx[None,:] - gx[:,None]   # (92,92) : true_j - true_i
-    dx_pr = px[None,:] - px[:,None]   # (92,92)
+    dx_a = gx[None, :] - gx[:, None]
+    dx_b = px[None,:] - px[:,None]
 
-    dy_gt = gy[None,:] - gy[:,None]
-    dy_pr = py[None,:] - py[:,None]
+    dy_a = gy[None,:] - gy[:,None]
+    dy_b = py[None,:] - py[:,None]
 
-    dz_gt = gz[None,:] - gz[:,None]
-    dz_pr = pz[None,:] - pz[:,None]
+    dz_a = gz[None,:] - gz[:,None]
+    dz_b = pz[None,:] - pz[:,None]
 
-    # error = pred_diff minus true_diff
-    err_x[f] = dx_pr - dx_gt
-    err_y[f] = dy_pr - dy_gt
-    err_z[f] = dz_pr - dz_gt
+    err_x[f] = np.sqrt(((dx_a - dx_b)**2))
+    err_y[f] = np.sqrt(((dy_a - dy_b)**2))
+    err_z[f] = np.sqrt(((dz_a - dz_b)**2))
 
-# symmetric color limit
 lim = max(np.abs(err_x).max(),
           np.abs(err_y).max(),
           np.abs(err_z).max())
@@ -625,10 +640,7 @@ err_mats = [err_x, err_y, err_z]
 ims = []
 
 for ax, mat, title in zip(axes, err_mats, titles):
-    im = ax.imshow(mat[0],
-                   vmin=-lim, vmax=lim,
-                   cmap='seismic', origin='lower',
-                   aspect='equal')
+    im = ax.imshow(mat[0],vmin=0, vmax=lim,cmap='plasma', origin='lower')#,aspect='equal')
     ax.set_title(title)
     ax.set_xlabel('Pred atom index (i)')
     ax.set_ylabel('True atom index (j)')
@@ -637,7 +649,7 @@ for ax, mat, title in zip(axes, err_mats, titles):
     ims.append(im)
 
 cbar = fig.colorbar(ims[-1], ax=axes, shrink=0.8)
-cbar.set_label('Error [Å]')
+cbar.set_label('RMSD Error [Å]')
 
 def update(frame):
     for im, mat in zip(ims, err_mats):
@@ -645,9 +657,29 @@ def update(frame):
     fig.suptitle(f'Frame {frame}')
     return ims
 
-ani = FuncAnimation(fig, update,
-                    frames=n_frames, interval=200, blit=False)
+ani = FuncAnimation(fig, update,frames=n_frames, interval=200, blit=False)
 plt.show()
 
 ani.save('axis_component_errors_pred_vs_true_full92.gif',
          writer=PillowWriter(fps=5), dpi=250)
+
+mean_rmsd_x = err_x.mean(axis=(1,2))
+mean_rmsd_y = err_y.mean(axis=(1,2))
+mean_rmsd_z = err_z.mean(axis=(1,2))
+# overall mean across axes
+mean_rmsd   = (mean_rmsd_x + mean_rmsd_y + mean_rmsd_z) / 3
+
+# plot
+plt.style.use('dark_background')
+plt.figure(figsize=(8, 5))
+plt.plot(mean_rmsd_x, label='RMSD X', linestyle='--')
+plt.plot(mean_rmsd_y, label='RMSD Y', linestyle='--')
+plt.plot(mean_rmsd_z, label='RMSD Z', linestyle='--')
+plt.plot(mean_rmsd,   label='Mean RMSD', linewidth=2)
+plt.xlabel('Frame index')
+plt.ylabel('Mean RMSD [Å]')
+plt.title('RMSD Progression Over Test Frames')
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
