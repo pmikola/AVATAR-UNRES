@@ -1,19 +1,16 @@
-import gc
-import os
-import random
-import sys
-import sysconfig
-import time
-import matplotlib
-import numpy as np
-import torch
+import gc, os, random, sys, sysconfig, time, copy, math
+import matplotlib, numpy as np, torch, torch.nn.functional as F
 from torch import nn, optim
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.swa_utils import AveragedModel, SWALR, update_bn
 from AVATAR import AvatarUNRES
-import torch.nn.functional as F
+from pathlib import Path
+import itertools, shutil, matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation, FFMpegWriter, PillowWriter
+from mpl_toolkits.mplot3d import Axes3D                                   # noqa: F401
 
-random.seed(2024)
-np.random.seed(2024)
-torch.manual_seed(2024)
+random.seed(2024); np.random.seed(2024); torch.manual_seed(2024)
 # mplab = importlib.util.spec_from_file_location("mplab.name", "C:\Python311\Lib\site-packages\mayavi\mlab.py")
 
 path = './proteinA/'
@@ -32,12 +29,26 @@ else:
 # device = torch.device('cpu')
 
 
-from pathlib import Path
-import itertools, shutil, numpy as np, matplotlib.pyplot as plt, torch
-from matplotlib.animation import FuncAnimation, FFMpegWriter, PillowWriter
-from mpl_toolkits.mplot3d import Axes3D
 
 FS_PER_UNRES_UNIT = 48.89
+
+class Lookahead(torch.optim.Optimizer):
+    def __init__(self, base_opt, k=5, alpha=0.5):
+        self.base_opt = base_opt
+        self.k = k
+        self.alpha = alpha
+        self.counter = 0
+        self.fast_params = [p.clone().detach() for p in base_opt.param_groups[0]['params']]
+        super().__init__(base_opt.param_groups, {})
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = self.base_opt.step(closure)
+        self.counter += 1
+        if self.counter % self.k == 0:
+            for q, p in zip(self.fast_params, self.base_opt.param_groups[0]['params']):
+                q.data.add_(self.alpha, p.data - q.data)
+                p.data.copy_(q.data)
+        return loss
 
 def _grab_block(fh):
     data = []
@@ -248,21 +259,42 @@ model_path     = './avatar_unres_best.pt'
 load_if_exists = False
 skip_training = False
 
-num_epochs       = 10000
+num_epochs       = 1000
 batch_size       = 16
 base_lr          = 1e-3
 max_grad_norm    = 2.0
 noise_cfg = dict(pos = 0.025,vel = 0.025,acc = 0.025)
 
+use_swa      = True
+swa_start_ep = int(num_epochs * 0.75)
+swa_lr       = base_lr * 0.1
+use_ema      = True
+ema_decay    = 0.999
+
+
+
 model      = AvatarUNRES(pos_t, vel_t, acc_t).to(device)
+optimiser   = optim.Adam(model.parameters(), lr=base_lr, weight_decay=1e-5,amsgrad=True)
 pytorch_total_params = sum(p.numel() for p in model.parameters())
 print('Model No. Params:', pytorch_total_params)
-optimiser   = optim.Adam(model.parameters(), lr=base_lr, weight_decay=1e-5,amsgrad=True)
+
+if use_swa:
+    swa_model     = AveragedModel(model)
+    swa_scheduler = SWALR(optimiser, swa_lr=swa_lr)
+
+if use_ema:
+    ema_params = [p.clone().detach() for p in model.parameters()]  # shadow copy
+    for p in ema_params:
+        p.requires_grad = False
+
+
+
 scheduler   = optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode='min', factor=0.8, patience=200,min_lr=1e-6)
 print('LR set:',scheduler.get_last_lr())
 criterion   = nn.MSELoss()
 
 best_val = float('inf')
+v_loss = float('inf')
 best_ckpt = None
 
 if skip_training:
@@ -379,12 +411,22 @@ else:
                + w_loss * loss_angle\
                + w_loss * loss_dist_L1 \
                + w_loss *loss_max_rmsd
+        bloss.append(loss.item())
 
         optimiser.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
         optimiser.step()
-        bloss.append(loss.item())
+
+        if use_ema:
+            with torch.no_grad():
+                for p, ema_p in zip(model.parameters(), ema_params):
+                    ema_p.mul_(ema_decay).add_(p.data, alpha=1.0 - ema_decay)
+        if use_swa and epoch >= swa_start_ep:
+            swa_model.update_parameters(model)
+            swa_scheduler.step()
+        else:
+            scheduler.step(v_loss)
 
         # Note: --------------- validation ------------------------------------
         if val_cursor + batch_size > perm_val.numel():
@@ -466,7 +508,6 @@ else:
                 val_rmsd_x.append(vx);val_rmsd_y.append(vy);val_rmsd_z.append(vz)
                 val_rmsd_m.append((vx + vy + vz) / 3)
 
-        # ---------- LR scheduler & checkpoint --------------------------
         scheduler.step(v_loss)
 
         if v_loss < best_val:
@@ -498,6 +539,23 @@ else:
 
 if best_ckpt is not None:
     model.load_state_dict(best_ckpt['state_dict'])
+    print("✓ Restored best checkpoint weights (val loss {:.4e})".format(best_val))
+
+if use_swa:
+    def _bn_loader():
+        for i in range(0, train_size - 1):
+            yield (pos_t[i:i+1], vel_t[i:i+1], acc_t[i:i+1])
+    update_bn(_bn_loader(), swa_model, device=device)
+    model = swa_model
+    print("✓ SWA weights loaded")
+
+if use_ema:
+    raw_params = [p.clone().detach() for p in model.parameters()]
+    with torch.no_grad():
+        for p, ema_p in zip(model.parameters(), ema_params):
+            p.data.copy_(ema_p)
+    print("✓ EMA shadow weights loaded")
+
 
 
 fig,ax=plt.subplots(figsize=(8,5))
