@@ -1,5 +1,5 @@
 import math, gc, torch, torch.nn as nn, torch.nn.functional as F
-from timm.models.layers import DropPath
+from timm.layers import DropPath
 from linformer import Linformer
 
 class RMSNorm(nn.Module):

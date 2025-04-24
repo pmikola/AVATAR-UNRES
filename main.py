@@ -1,6 +1,6 @@
 import gc, os, random, sys, sysconfig, time, copy, math
 import matplotlib, numpy as np, torch, torch.nn.functional as F
-from torch import nn, optim
+from torch import nn, optim, amp
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.optim.swa_utils import AveragedModel, SWALR, update_bn
@@ -28,8 +28,6 @@ else:
     print("CUDA is not available. CPU will be used.")
 # device = torch.device('cpu')
 
-
-
 FS_PER_UNRES_UNIT = 48.89
 
 class Lookahead(torch.optim.Optimizer):
@@ -46,7 +44,7 @@ class Lookahead(torch.optim.Optimizer):
         self.counter += 1
         if self.counter % self.k == 0:
             for q, p in zip(self.fast_params, self.base_opt.param_groups[0]['params']):
-                q.data.add_(self.alpha, p.data - q.data)
+                q.data.add_(p.data - q.data, alpha=self.alpha)
                 p.data.copy_(q.data)
         return loss
 
@@ -259,7 +257,7 @@ model_path     = './avatar_unres_best.pt'
 load_if_exists = False
 skip_training = False
 
-num_epochs       = 1000
+num_epochs       = 10000
 batch_size       = 16
 base_lr          = 1e-3
 max_grad_norm    = 2.0
@@ -271,10 +269,10 @@ swa_lr       = base_lr * 0.1
 use_ema      = True
 ema_decay    = 0.999
 
-
-
 model      = AvatarUNRES(pos_t, vel_t, acc_t).to(device)
-optimiser   = optim.Adam(model.parameters(), lr=base_lr, weight_decay=1e-5,amsgrad=True)
+base_opt   = AdamW(model.parameters(), lr=base_lr, weight_decay=1e-4)
+optimiser  = Lookahead(base_opt, k=5, alpha=0.5)
+scaler = amp.GradScaler()
 pytorch_total_params = sum(p.numel() for p in model.parameters())
 print('Model No. Params:', pytorch_total_params)
 
@@ -287,14 +285,13 @@ if use_ema:
     for p in ema_params:
         p.requires_grad = False
 
-
-
-scheduler   = optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode='min', factor=0.8, patience=200,min_lr=1e-6)
+# scheduler   = optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode='min', factor=0.95, patience=200,min_lr=1e-6)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimiser,T_0=200,T_mult=1,eta_min=1e-6)
 print('LR set:',scheduler.get_last_lr())
 criterion   = nn.MSELoss()
 
 best_val = float('inf')
-v_loss = float('inf')
+v_loss = float(1000)
 best_ckpt = None
 
 if skip_training:
@@ -414,10 +411,10 @@ else:
         bloss.append(loss.item())
 
         optimiser.zero_grad()
-        loss.backward()
+        scaler.scale(loss).backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
-        optimiser.step()
-
+        scaler.step(optimiser);
+        scaler.update()
         if use_ema:
             with torch.no_grad():
                 for p, ema_p in zip(model.parameters(), ema_params):
