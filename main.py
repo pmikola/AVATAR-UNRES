@@ -248,7 +248,7 @@ model_path     = './avatar_unres_best.pt'
 load_if_exists = False
 skip_training = False
 
-num_epochs       = 2000
+num_epochs       = 10000
 batch_size       = 16
 base_lr          = 1e-3
 max_grad_norm    = 2.0
@@ -276,6 +276,10 @@ if load_if_exists and os.path.isfile(model_path):
     print(f'✓ loaded checkpoint  (val loss {best_val:.4e})')
 
 bloss, vloss = [], []
+train_rmsd_x,train_rmsd_y,train_rmsd_z,train_rmsd_m=[],[],[],[]
+val_rmsd_x,val_rmsd_y,val_rmsd_z,val_rmsd_m=[],[],[],[]
+train_idx=torch.arange(0,train_size-1,device=device)
+val_idx=torch.arange(train_size,n_frames-1,device=device)
 w_loss = 0.5
 start = time.time()
 if skip_training:
@@ -387,6 +391,21 @@ else:
             perm_val, val_cursor = torch.randperm(val_pool.numel(), device=device), 0
         vidx  = perm_val[val_cursor : val_cursor+batch_size]
         t_val = val_pool[vidx]; val_cursor += batch_size
+        if epoch % 50 == 0:
+            with torch.no_grad():
+                rx = torch.sqrt((diff_pos[:, :, 0] ** 2).mean()).item()
+                ry = torch.sqrt((diff_pos[:, :, 1] ** 2).mean()).item()
+                rz = torch.sqrt((diff_pos[:, :, 2] ** 2).mean()).item()
+                train_rmsd_x.append(rx);
+                train_rmsd_y.append(ry);
+                train_rmsd_z.append(rz)
+                train_rmsd_m.append((rx + ry + rz) / 3)
+            if val_cursor + batch_size > perm_val.numel():
+                perm_val, val_cursor = torch.randperm(val_idx.numel(), device=device), 0
+            batch_v = perm_val[val_cursor:val_cursor + batch_size]
+            tv = val_idx[batch_v];
+            val_cursor += batch_size
+
 
         model.eval()
         with torch.no_grad():
@@ -439,6 +458,13 @@ else:
                     + w_loss * loss_max_rmsd
             ).item()
             vloss.append(v_loss)
+            if epoch % 50 == 0:
+                diff_v = pv_pos - pos_t[tv + 1]
+                vx = torch.sqrt((diff_v[:, :, 0] ** 2).mean()).item()
+                vy = torch.sqrt((diff_v[:, :, 1] ** 2).mean()).item()
+                vz = torch.sqrt((diff_v[:, :, 2] ** 2).mean()).item()
+                val_rmsd_x.append(vx);val_rmsd_y.append(vy);val_rmsd_z.append(vz)
+                val_rmsd_m.append((vx + vy + vz) / 3)
 
         # ---------- LR scheduler & checkpoint --------------------------
         scheduler.step(v_loss)
@@ -472,6 +498,28 @@ else:
 
 if best_ckpt is not None:
     model.load_state_dict(best_ckpt['state_dict'])
+
+
+fig,ax=plt.subplots(figsize=(8,5))
+ax.plot(train_rmsd_x,'--',label='train X')
+ax.plot(train_rmsd_y,'--',label='train Y')
+ax.plot(train_rmsd_z,'--',label='train Z')
+ax.plot(train_rmsd_m,linewidth=2,label='train mean')
+ax.plot(val_rmsd_x,':',label='val X')
+ax.plot(val_rmsd_y,':',label='val Y')
+ax.plot(val_rmsd_z,':',label='val Z')
+ax.plot(val_rmsd_m,linewidth=2,label='val mean')
+ax.set_xlabel('Epoch')
+ax.set_ylabel('RMSD [Å]')
+ax.set_title('Train/Val RMSD per Axis and Mean')
+ax.legend()
+ax.grid(True)
+plt.tight_layout()
+plt.show()
+
+
+
+
 
 
 plt.style.use('dark_background')

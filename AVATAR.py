@@ -78,12 +78,12 @@ class LinformerBlock(nn.Module):
                               share_kv=True, dropout=p)
         self.norm1 = nn.LayerNorm(d_model)
         self.ff = FeedForward(d_model, p)
-        self.drop = DropPath(self.p_drop)
-        self.gamma1 = nn.Parameter(torch.ones(d_model) * 1e-4)
+        #self.drop = DropPath(self.p_drop)
+        #self.gamma1 = nn.Parameter(torch.ones(d_model) * 1e-4)
 
     def forward(self, x):
-        x = x + self.gamma1*self.attn(self.norm1(x)) * (1 / math.sqrt(2))
-        x = self.drop(self.ff(x))
+        x = x + self.attn(self.norm1(x)) * (1 / math.sqrt(2))
+        x = self.ff(x)
         return x
 
 class Head(nn.Module):
@@ -107,9 +107,9 @@ class AvatarUNRES(nn.Module):
     def __init__(self, pos, vel, acc,
                  d_model=256,
                  n_stem_blocks=4,
-                 n_attn_blocks=8,
-                 attn_heads=8,
-                 lin_k=64,
+                 n_attn_blocks=4,
+                 attn_heads=4,
+                 lin_k=32,
                  p=0.1):
         super().__init__()
         gc.collect(); torch.cuda.empty_cache()
@@ -192,7 +192,6 @@ class AvatarUNRES(nn.Module):
 
         h = h[:,1:]
         hp_cat, hv_cat, ha_cat = h.split(self.N, dim=1)
-
 
         p_out = self.head_p(hp_cat, self.mu, self.sig, gate_p)
         v_out = self.head_v(hv_cat, self.mu, self.sig, gate_v)
