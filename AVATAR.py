@@ -78,10 +78,10 @@ class FeedForward(nn.Module):
         return x + self.net(x) * self.scale
 
 class LinformerBlock(nn.Module):
-    def __init__(self, d_model, seq_len, heads, k, p=0.1):
+    def __init__(self, d_model, seq_len, heads, k, p=0.1,depth:int=1):
         super().__init__()
         self.norm1 = RMSNorm(d_model)
-        self.attn = Linformer(dim=d_model, seq_len=seq_len, depth=1, heads=heads, k=k, one_kv_head=True, share_kv=True, dropout=p)
+        self.attn = Linformer(dim=d_model, seq_len=seq_len, depth=depth, heads=heads, k=k, one_kv_head=True, share_kv=True, dropout=p)
         self.drop = DropPath(0.05)
         self.gamma1 = nn.Parameter(torch.ones(d_model) * 1e-4)
         self.ff = FeedForward(d_model, p)
@@ -116,7 +116,7 @@ class NCALayer(nn.Module):
         return x.transpose(1, 2)
 
 class AvatarUNRES(nn.Module):
-    def __init__(self, pos, vel, acc, d_model=256, n_stem_blocks=4, n_attn_blocks=4, attn_heads=4, lin_k=32, p=0.1, nca_steps=4):
+    def __init__(self, pos, vel, acc, d_model=256, n_stem_blocks=4, n_attn_blocks=8, attn_heads=8, lin_k=128, p=0.1, nca_steps=3):
         super().__init__()
         gc.collect(); torch.cuda.empty_cache()
         self.N = pos.shape[1]

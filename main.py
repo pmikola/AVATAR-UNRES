@@ -9,6 +9,8 @@ from pathlib import Path
 import itertools, shutil, matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, FFMpegWriter, PillowWriter
 from mpl_toolkits.mplot3d import Axes3D                                   # noqa: F401
+from torchviz import make_dot
+
 
 random.seed(2024); np.random.seed(2024); torch.manual_seed(2024)
 # mplab = importlib.util.spec_from_file_location("mplab.name", "C:\Python311\Lib\site-packages\mayavi\mlab.py")
@@ -215,6 +217,13 @@ def animate_trajectory(xfile, *, n_res=46, stride=10,
         print("Saved movie to:", Path(outfile).resolve())
     return ani
 
+def rollout_cap(epoch: int,num_epochs: int,min_len: int = 1,max_len: int | None = None) -> int:
+    if max_len is None:
+        max_len = n_frames - 2
+    max_len -= 1
+    span = max_len - min_len
+    return min_len + int(span * epoch / (num_epochs - 1))
+
 X_FILE = r"proteinA/prota_MD_NVE-noxdr_MD000.x"
 
 times_t, pos_t, vel_t, acc_t, forces_t = load_trajectory_tensors(X_FILE)
@@ -237,14 +246,16 @@ acc_t = acc_t - acc_centroids
 # anim = animate_trajectory(X_FILE, stride=20, fps=5,slow=100, outfile="proteinA_whole_dynamics.mp4")
 # plt.show()
 
-train_size = int(0.9 * pos_t.shape[0])
+n_frames   = pos_t.shape[0]
+train_size = int(0.90 * n_frames)
+test_size = int(n_frames-train_size)
+
 coords3d, coords_test3d = pos_t[:train_size], pos_t[train_size:]
 velocities3d, velocities_test3d = vel_t[:train_size], vel_t[train_size:]
 accelerations3d, accelerations_test3d = acc_t[:train_size], acc_t[train_size:]
 forces3d, forces_test3d = forces_t[:train_size], forces_t[train_size:]
 
-n_frames   = pos_t.shape[0]
-train_size = int(0.90 * n_frames)
+
 
 train_pool = torch.arange(0,          train_size-1, device=device)
 val_pool   = torch.arange(train_size, n_frames-1,   device=device)
@@ -253,7 +264,7 @@ perm_train   = torch.randperm(train_pool.numel(), device=device)
 perm_val     = torch.randperm(val_pool.numel(),   device=device)
 train_cursor = val_cursor = 0                     #
 
-model_path     = './avatar_unres_best.pt'
+model_path     = 'avatar_unres_best.pt'
 load_if_exists = False
 skip_training = False
 
@@ -262,34 +273,34 @@ batch_size       = 16
 base_lr          = 1e-3
 max_grad_norm    = 2.0
 noise_cfg = dict(pos = 0.025,vel = 0.025,acc = 0.025)
+max_len_cap = 4
 
-use_swa      = True
+use_swa      = True#not skip_training
 swa_start_ep = int(num_epochs * 0.75)
-swa_lr       = base_lr * 0.1
-use_ema      = True
+swa_lr       = base_lr*0.05
+use_ema      = use_swa
 ema_decay    = 0.999
 
 model      = AvatarUNRES(pos_t, vel_t, acc_t).to(device)
-base_opt   = AdamW(model.parameters(), lr=base_lr, weight_decay=1e-4)
-optimiser  = Lookahead(base_opt, k=5, alpha=0.5)
+base_opt   = AdamW(model.parameters(), lr=base_lr, weight_decay=5e-5)
+optimiser  = Lookahead(base_opt, k=6, alpha=0.75)
 scaler = amp.GradScaler()
 pytorch_total_params = sum(p.numel() for p in model.parameters())
 print('Model No. Params:', pytorch_total_params)
 
 if use_swa:
     swa_model     = AveragedModel(model)
-    swa_scheduler = SWALR(optimiser, swa_lr=swa_lr)
+    swa_scheduler = SWALR(optimiser, swa_lr=swa_lr,anneal_strategy="linear")
 
 if use_ema:
     ema_params = [p.clone().detach() for p in model.parameters()]  # shadow copy
     for p in ema_params:
         p.requires_grad = False
 
-# scheduler   = optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode='min', factor=0.95, patience=200,min_lr=1e-6)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimiser,T_0=200,T_mult=1,eta_min=1e-6)
+scheduler   = optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode='min', factor=0.95, patience=200,min_lr=1e-6)
+# scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimiser,T_0=222,T_mult=1,eta_min=1e-6)
 print('LR set:',scheduler.get_last_lr())
 criterion   = nn.MSELoss()
-
 best_val = float('inf')
 v_loss = float(1000)
 best_ckpt = None
@@ -316,11 +327,11 @@ if skip_training:
 else:
     # Note: ─────────────────────────── training loop ─────────────────────────
     for epoch in range(num_epochs):
-        if train_cursor + batch_size > perm_train.numel():
-            perm_train, train_cursor = torch.randperm(train_pool.numel(), device=device), 0
-        idx = perm_train[train_cursor:train_cursor + batch_size]
-        t = train_pool[idx];
-        train_cursor += batch_size
+        model.train()
+        L_cap = rollout_cap(epoch, num_epochs, min_len=1, max_len=max_len_cap)  # tweak max
+        L_batch = torch.randint(1, L_cap + 1, (batch_size,), device=device)  # (B,)
+        L_max = int(L_batch.max())
+        t = torch.randint(0, train_size - L_max - 1, (batch_size,), device=device)
 
         # ---- data augmentation ----
         pos_in = pos_t[t] + torch.randn_like(pos_t[t]) * noise_cfg['pos']
@@ -361,30 +372,42 @@ else:
             sign = (-1) ** torch.randint(0, 2, (1,), device=device)
             pos_in, vel_in, acc_in = pos_in * sign, vel_in * sign, acc_in * sign
 
+        pos_curr, vel_curr, acc_curr = pos_in, vel_in, acc_in
+        fin_pos = torch.empty_like(pos_curr)
+        fin_vel = torch.empty_like(vel_curr)
+        fin_acc = torch.empty_like(acc_curr)
         model.train()
-        pr_pos, pr_vel, pr_acc = model(pos_in, vel_in, acc_in)
-        pred = torch.cat([pr_pos, pr_vel, pr_acc], dim=1)
-        target = torch.cat([pos_t[t + 1], vel_t[t + 1], acc_t[t + 1]], dim=1)
+        for step in range(1, L_max + 1):
+            pos_curr, vel_curr, acc_curr = model(pos_curr, vel_curr, acc_curr)
+            hit = (L_batch == step).view(-1, 1, 1)
+            fin_pos = torch.where(hit, pos_curr, fin_pos)
+            fin_vel = torch.where(hit, vel_curr, fin_vel)
+            fin_acc = torch.where(hit, acc_curr, fin_acc)
+        target_pos = pos_t[t + L_batch]
+        target_vel = vel_t[t + L_batch]
+        target_acc = acc_t[t + L_batch]
+
+        pred = torch.cat([fin_pos, fin_vel, fin_acc], dim=1)
+        target = torch.cat([target_pos, target_vel, target_acc], dim=1)
 
         # 1) main next‐step MSE
         loss_main = criterion(pred, target)
 
         # 2) pairwise x–y–z distance matrix loss
-        true_pos = pos_t[t + 1]  # (B, N, 3)
-        D_gt = torch.cdist(true_pos, true_pos)  # (B, N, N)
-        D_pr = torch.cdist(pr_pos, pr_pos)
+        D_gt = torch.cdist(target_pos, target_pos)
+        D_pr = torch.cdist(fin_pos,   fin_pos)
         loss_dist = F.mse_loss(D_pr, D_gt)
         loss_dist_L1 = (D_pr - D_gt).abs().mean()
 
         # 3) centroid consistency loss
-        cg = true_pos.mean(dim=1, keepdim=True)  # (B,1,3)
-        cp = pr_pos.mean(dim=1, keepdim=True)
+        cg = target_pos.mean(dim=1, keepdim=True)  # (B,1,3)
+        cp = fin_pos.mean(dim=1, keepdim=True)
         loss_cent = F.mse_loss(cp, cg)
 
         # 4) local bond‐angle loss on Cαs (first n_res atoms)
         n_res = 46
-        ca_gt = true_pos[:, :n_res]
-        ca_pr = pr_pos[:, :n_res]
+        ca_gt = target_pos[:, :n_res]
+        ca_pr = fin_pos[:, :n_res]
         v1_gt = ca_gt[:, :-2] - ca_gt[:, 1:-1]
         v2_gt = ca_gt[:, 2:] - ca_gt[:, 1:-1]
         v1_pr = ca_pr[:, :-2] - ca_pr[:, 1:-1]
@@ -394,10 +417,9 @@ else:
         loss_angle = F.mse_loss(cos_pr, cos_gt)
 
         # 5) worst-atom RMSD penalty
-        true_pos = pos_t[t + 1]  # (B, N, 3)
-        diff_pos = pr_pos - true_pos  # (B, N, 3)
+        diff_pos      = fin_pos - target_pos
         # per‐atom RMSD over x,y,z
-        rmsd_per_atom = torch.sqrt((diff_pos ** 2).mean(dim=2))  # (B, N)
+        rmsd_per_atom = torch.sqrt((diff_pos ** 2).mean(dim=2))
         # max‐atom RMSD, then mean over batch
         loss_max_rmsd = rmsd_per_atom.max(dim=1)[0].mean()
 
@@ -413,19 +435,20 @@ else:
         optimiser.zero_grad()
         scaler.scale(loss).backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
-        scaler.step(optimiser);
+        scaler.step(optimiser)
         scaler.update()
+
         if use_ema:
             with torch.no_grad():
                 for p, ema_p in zip(model.parameters(), ema_params):
                     ema_p.mul_(ema_decay).add_(p.data, alpha=1.0 - ema_decay)
-        if use_swa and epoch >= swa_start_ep:
+        if use_swa:
             swa_model.update_parameters(model)
-            swa_scheduler.step()
-        else:
-            scheduler.step(v_loss)
 
-        # Note: --------------- validation ------------------------------------
+
+
+
+                # Note: --------------- validation ------------------------------------
         if val_cursor + batch_size > perm_val.numel():
             perm_val, val_cursor = torch.randperm(val_pool.numel(), device=device), 0
         vidx  = perm_val[val_cursor : val_cursor+batch_size]
@@ -435,108 +458,114 @@ else:
                 rx = torch.sqrt((diff_pos[:, :, 0] ** 2).mean()).item()
                 ry = torch.sqrt((diff_pos[:, :, 1] ** 2).mean()).item()
                 rz = torch.sqrt((diff_pos[:, :, 2] ** 2).mean()).item()
-                train_rmsd_x.append(rx);
-                train_rmsd_y.append(ry);
+                train_rmsd_x.append(rx)
+                train_rmsd_y.append(ry)
                 train_rmsd_z.append(rz)
                 train_rmsd_m.append((rx + ry + rz) / 3)
-            if val_cursor + batch_size > perm_val.numel():
-                perm_val, val_cursor = torch.randperm(val_idx.numel(), device=device), 0
-            batch_v = perm_val[val_cursor:val_cursor + batch_size]
-            tv = val_idx[batch_v];
-            val_cursor += batch_size
-
 
         model.eval()
         with torch.no_grad():
-            pv_pos, pv_vel, pv_acc = model(pos_t[t_val], vel_t[t_val], acc_t[t_val])
-            pred_val = torch.cat([pv_pos, pv_vel, pv_acc], dim=1)
-            target_val = torch.cat([pos_t[t_val + 1], vel_t[t_val + 1], acc_t[t_val + 1]], dim=1)
+            L_batch_v = torch.randint(1, L_cap + 1, (batch_size,), device=device)
+            L_max_v = int(L_batch_v.max())
+            tv = torch.randint(train_size, n_frames - L_max_v - 1,
+                               (batch_size,), device=device)
 
-            # 1) main next‐step MSE
-            loss_main_v = criterion(pred_val, target_val)
+            pos_v, vel_v, acc_v = pos_t[tv], vel_t[tv], acc_t[tv]
+            fin_pos_v = torch.empty_like(pos_v)
+            fin_vel_v = torch.empty_like(vel_v)
+            fin_acc_v = torch.empty_like(acc_v)
 
-            # 2) pairwise distance matrix loss
-            tp = pos_t[t_val + 1]
-            D_gt_v = torch.cdist(tp, tp)
-            D_pr_v = torch.cdist(pv_pos, pv_pos)
+            for step in range(1, L_max_v + 1):
+                pos_v, vel_v, acc_v = model(pos_v, vel_v, acc_v)
+                hit = (L_batch_v == step).view(-1, 1, 1)
+                fin_pos_v = torch.where(hit, pos_v, fin_pos_v)
+                fin_vel_v = torch.where(hit, vel_v, fin_vel_v)
+                fin_acc_v = torch.where(hit, acc_v, fin_acc_v)
+
+            targ_pos_v = pos_t[tv + L_batch_v]
+            targ_vel_v = vel_t[tv + L_batch_v]
+            targ_acc_v = acc_t[tv + L_batch_v]
+
+            pred_v = torch.cat([fin_pos_v, fin_vel_v, fin_acc_v], dim=1)
+            target_v = torch.cat([targ_pos_v, targ_vel_v, targ_acc_v], dim=1)
+
+            loss_main_v = criterion(pred_v, target_v)
+            D_gt_v = torch.cdist(targ_pos_v, targ_pos_v)
+            D_pr_v = torch.cdist(fin_pos_v, fin_pos_v)
             loss_dist_v = F.mse_loss(D_pr_v, D_gt_v)
             loss_dist_L1_v = (D_pr_v - D_gt_v).abs().mean()
 
-            # 3) centroid consistency loss
-            cent_gt_v = tp.mean(dim=1, keepdim=True)
-            cent_pr_v = pv_pos.mean(dim=1, keepdim=True)
-            loss_cent_v = F.mse_loss(cent_pr_v, cent_gt_v)
+            cg_gt_v = targ_pos_v.mean(dim=1, keepdim=True)
+            cg_pr_v = fin_pos_v.mean(dim=1, keepdim=True)
+            loss_cent_v = F.mse_loss(cg_pr_v, cg_gt_v)
 
-            # 4) local bond‑angle loss on Cαs
-            n_res = 46
-            ca_gt_v = tp[:, :n_res]
-            ca_pr_v = pv_pos[:, :n_res]
+            ca_gt_v = targ_pos_v[:, :n_res]
+            ca_pr_v = fin_pos_v[:, :n_res]
             v1_gt_v = ca_gt_v[:, :-2] - ca_gt_v[:, 1:-1]
             v2_gt_v = ca_gt_v[:, 2:] - ca_gt_v[:, 1:-1]
             v1_pr_v = ca_pr_v[:, :-2] - ca_pr_v[:, 1:-1]
             v2_pr_v = ca_pr_v[:, 2:] - ca_pr_v[:, 1:-1]
-            cos_gt_v = F.cosine_similarity(v1_gt_v, v2_gt_v, dim=-1)
-            cos_pr_v = F.cosine_similarity(v1_pr_v, v2_pr_v, dim=-1)
-            loss_angle_v = F.mse_loss(cos_pr_v, cos_gt_v)
+            loss_angle_v = F.mse_loss(
+                F.cosine_similarity(v1_pr_v, v2_pr_v, dim=-1),
+                F.cosine_similarity(v1_gt_v, v2_gt_v, dim=-1)
+            )
+            diff_pos_v = fin_pos_v - targ_pos_v
+            rmsd_atom_v = torch.sqrt((diff_pos_v ** 2).mean(dim=2))
+            loss_max_rmsd_v = rmsd_atom_v.max(dim=1)[0].mean()
 
-            # 5) worst-atom RMSD penalty
-            true_pos = pos_t[t + 1]  # (B, N, 3)
-            diff_pos = pr_pos - true_pos  # (B, N, 3)
-            # per‐atom RMSD over x,y,z
-            rmsd_per_atom = torch.sqrt((diff_pos ** 2).mean(dim=2))  # (B, N)
-            # max‐atom RMSD, then mean over batch
-            loss_max_rmsd = rmsd_per_atom.max(dim=1)[0].mean()
-
-            # total validation loss
             v_loss = (
                     loss_main_v
                     + w_loss * loss_dist_v
+                    + w_loss * loss_dist_L1_v
                     + w_loss * loss_cent_v
                     + w_loss * loss_angle_v
-                    + w_loss * loss_dist_L1_v
-                    + w_loss * loss_max_rmsd
+                    + w_loss * loss_max_rmsd_v
             ).item()
             vloss.append(v_loss)
             if epoch % 50 == 0:
-                diff_v = pv_pos - pos_t[tv + 1]
-                vx = torch.sqrt((diff_v[:, :, 0] ** 2).mean()).item()
-                vy = torch.sqrt((diff_v[:, :, 1] ** 2).mean()).item()
-                vz = torch.sqrt((diff_v[:, :, 2] ** 2).mean()).item()
-                val_rmsd_x.append(vx);val_rmsd_y.append(vy);val_rmsd_z.append(vz)
+                vx = torch.sqrt((diff_pos_v[:, :, 0] ** 2).mean()).item()
+                vy = torch.sqrt((diff_pos_v[:, :, 1] ** 2).mean()).item()
+                vz = torch.sqrt((diff_pos_v[:, :, 2] ** 2).mean()).item()
+                val_rmsd_x.append(vx)
+                val_rmsd_y.append(vy)
+                val_rmsd_z.append(vz)
                 val_rmsd_m.append((vx + vy + vz) / 3)
+        if epoch >= swa_start_ep:
+            swa_scheduler.step()
+        else:
+            scheduler.step(v_loss)
 
-        scheduler.step(v_loss)
-
+        # ───────────────────────── checkpoint / logging ────────────────────
         if v_loss < best_val:
             best_val = v_loss
             best_ckpt = {
                 'state_dict': model.state_dict(),
-                'optim'    : optimiser.state_dict(),
-                'best_val' : best_val
+                'optim': optimiser.state_dict(),
+                'best_val': best_val
             }
-            torch.save(best_ckpt, model_path)
             flag = ' ⭑ saved'
         else:
             flag = ''
 
         if epoch % 50 == 0:
             lr_now = optimiser.param_groups[0]['lr']
-            print(f'Epoch {epoch+1:4d}/{num_epochs} · '
+            print(f'Epoch {epoch + 1:4d}/{num_epochs} · '
                   f'lr {lr_now:.2e} · '
-                  f'train L {loss.item():.3e} · val L {v_loss:.3e}{flag}')
+                  f'L_cap {L_cap:2d} · '
+                  f'train L {loss.item():.3e} · val L {v_loss:.3e}{flag}')
 
     print(f'\n⌛ finished in {(time.time()-start)/60:.1f} min')
     fig = plt.figure()
     # plt.style.use('dark_background')
     plt.plot(bloss, c='blue', label='train_loss')
     plt.plot(vloss, c='orange', label='test_loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
     plt.legend()
     plt.grid()
     plt.show()
 
-if best_ckpt is not None:
-    model.load_state_dict(best_ckpt['state_dict'])
-    print("✓ Restored best checkpoint weights (val loss {:.4e})".format(best_val))
+
 
 if use_swa:
     def _bn_loader():
@@ -544,15 +573,19 @@ if use_swa:
             yield (pos_t[i:i+1], vel_t[i:i+1], acc_t[i:i+1])
     update_bn(_bn_loader(), swa_model, device=device)
     model = swa_model
+
     print("✓ SWA weights loaded")
 
-if use_ema:
-    raw_params = [p.clone().detach() for p in model.parameters()]
-    with torch.no_grad():
-        for p, ema_p in zip(model.parameters(), ema_params):
-            p.data.copy_(ema_p)
-    print("✓ EMA shadow weights loaded")
+best_ckpt = {
+        'state_dict': model.state_dict(),
+        'optim': optimiser.state_dict(),
+        'best_val': best_val
+    }
 
+if not skip_training:
+    torch.save(best_ckpt, model_path)
+    model.load_state_dict(best_ckpt['state_dict'])
+    print("✓ Restored best checkpoint weights (val loss {:.4e})".format(best_val))
 
 
 fig,ax=plt.subplots(figsize=(8,5))
@@ -564,18 +597,13 @@ ax.plot(val_rmsd_x,':',label='val X')
 ax.plot(val_rmsd_y,':',label='val Y')
 ax.plot(val_rmsd_z,':',label='val Z')
 ax.plot(val_rmsd_m,linewidth=2,label='val mean')
-ax.set_xlabel('Epoch')
+ax.set_xlabel('Epoch Checkpoint')
 ax.set_ylabel('RMSD [Å]')
 ax.set_title('Train/Val RMSD per Axis and Mean')
 ax.legend()
 ax.grid(True)
 plt.tight_layout()
 plt.show()
-
-
-
-
-
 
 plt.style.use('dark_background')
 gtdlen   = int(coords_test3d.shape[0] * 0.30)
@@ -736,9 +764,7 @@ lim = max(np.abs(err_x).max(),
 # setup plotting
 fig, axes = plt.subplots(1, 3, figsize=(15, 5))
 fig.subplots_adjust(wspace=0.4)
-titles = ['ΔX',
-          'ΔY',
-          'ΔZ']
+titles = ['ΔX','ΔY','ΔZ']
 err_mats = [err_x, err_y, err_z]
 ims = []
 
@@ -782,6 +808,43 @@ plt.plot(mean_rmsd,   label='Mean RMSD', linewidth=2)
 plt.xlabel('Frame index')
 plt.ylabel('Mean RMSD [Å]')
 plt.title('RMSD Progression Over Test Frames')
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+n_steps = test_size
+start_idx = train_size
+
+pos_curr = pos_t[start_idx:start_idx+1].to(device)
+vel_curr = vel_t[start_idx:start_idx+1].to(device)
+acc_curr = acc_t[start_idx:start_idx+1].to(device)
+
+rmsd_x, rmsd_y, rmsd_z = [], [], []
+model.eval()
+with torch.no_grad():
+    for step in range(1, n_steps ):
+        pr_pos, pr_vel, pr_acc = model(pos_curr, vel_curr, acc_curr)
+
+        gt_pos = pos_t[start_idx + step].unsqueeze(0).to(device)
+
+        diff = pr_pos - gt_pos
+        rmsd_x.append(torch.sqrt((diff[...,0]**2).mean()).item())
+        rmsd_y.append(torch.sqrt((diff[...,1]**2).mean()).item())
+        rmsd_z.append(torch.sqrt((diff[...,2]**2).mean()).item())
+
+        pos_curr, vel_curr, acc_curr = pr_pos, pr_vel, pr_acc
+
+import matplotlib.pyplot as plt
+
+steps = list(range(1, n_steps))
+plt.figure(figsize=(6,4))
+plt.plot(steps, rmsd_x, '-o', label='RMSD X')
+plt.plot(steps, rmsd_y, '-s', label='RMSD Y')
+plt.plot(steps, rmsd_z, '-^', label='RMSD Z')
+plt.xlabel('Autoregressive step n')
+plt.ylabel('RMSD [Å]')
+plt.title('Autoregressive multi-step RMSD on Validation')
 plt.legend()
 plt.grid(True)
 plt.tight_layout()
